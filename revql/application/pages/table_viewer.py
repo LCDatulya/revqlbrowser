@@ -31,8 +31,8 @@ class TableViewerApp:
 
         self.columns = ("Table Name", "Row Count")
         self.tree = ttk.Treeview(self.frame, columns=self.columns, show="headings")
-        self.tree.heading("Table Name", text="Table Name")
-        self.tree.heading("Row Count", text="Row Count", command=lambda: self.sorter.sort_by_column("Row Count", False))
+        self.tree.heading("Table Name", text="Table Name", command=lambda: self.sorter.sort_by_column("Table Name", False, 'alphabetical'))
+        self.tree.heading("Row Count", text="Row Count", command=lambda: self.sorter.sort_by_column("Row Count", False, 'numeric'))
         self.tree.grid(row=1, column=0, columnspan=4, sticky=(tk.W, tk.E, tk.N, tk.S))
 
         self.scrollbar = ttk.Scrollbar(self.frame, orient=tk.VERTICAL, command=self.tree.yview)
