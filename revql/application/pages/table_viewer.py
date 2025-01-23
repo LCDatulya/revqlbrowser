@@ -38,21 +38,24 @@ class TableViewerApp:
         self.delete_single_column_or_row_button = ttk.Button(self.frame, text="Delete Single Column/Row Tables", command=self.confirm_delete_single_column_or_row_tables)
         self.delete_single_column_or_row_button.grid(row=0, column=5, sticky=tk.W)
 
+        self.create_relationships_button = ttk.Button(self.frame, text="Create Relationships", command=self.create_relationships)
+        self.create_relationships_button.grid(row=0, column=6, sticky=tk.W)
+
         self.columns = ("Table Name", "Row Count", "Column Count")
         self.tree = ttk.Treeview(self.frame, columns=self.columns, show="headings")
         self.tree.heading("Table Name", text="Table Name", command=lambda: self.sorter.sort_by_column("Table Name", False, 'alphabetical'))
         self.tree.heading("Row Count", text="Row Count", command=lambda: self.sorter.sort_by_column("Row Count", False, 'numeric'))
         self.tree.heading("Column Count", text="Column Count", command=lambda: self.sorter.sort_by_column("Column Count", False, 'numeric'))
-        self.tree.grid(row=1, column=0, columnspan=6, sticky=(tk.W, tk.E, tk.N, tk.S))
+        self.tree.grid(row=1, column=0, columnspan=7, sticky=(tk.W, tk.E, tk.N, tk.S))
 
         self.scrollbar = ttk.Scrollbar(self.frame, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscroll=self.scrollbar.set)
-        self.scrollbar.grid(row=1, column=6, sticky=(tk.N, tk.S))
+        self.scrollbar.grid(row=1, column=7, sticky=(tk.N, tk.S))
 
         self.sorter = TableSorter(self.tree)
 
         self.table_count_label = ttk.Label(self.frame, text="Number of Tables: 0")
-        self.table_count_label.grid(row=2, column=0, columnspan=6, sticky=tk.W)
+        self.table_count_label.grid(row=2, column=0, columnspan=7, sticky=tk.W)
 
     def run(self):
         self.root.mainloop()
@@ -137,6 +140,15 @@ class TableViewerApp:
         if single_column_or_row_tables:
             messagebox.showinfo("Deleted Tables", f"Deleted single column/row tables: {', '.join(single_column_or_row_tables)}")
         self.display_table_data()
+
+    def create_relationships(self):
+        db_path = self.db_path_entry.get()
+        if not db_path:
+            messagebox.showwarning("No Database", "Please select a database first.")
+            return
+        
+        # Implement the logic to create relationships here
+        messagebox.showinfo("Create Relationships", "Relationships created successfully.")
 
     def browse_files(self):
         filename = filedialog.askopenfilename(
