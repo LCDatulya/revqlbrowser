@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, filedialog
-from application.utils.db_utils import get_table_data
+from ..utils.db_utils import get_table_data
+from ..utils.tablesorter import TableSorter
 
 class TableViewerApp:
     def __init__(self):
@@ -30,12 +31,14 @@ class TableViewerApp:
         self.columns = ("Table Name", "Row Count")
         self.tree = ttk.Treeview(self.frame, columns=self.columns, show="headings")
         self.tree.heading("Table Name", text="Table Name")
-        self.tree.heading("Row Count", text="Row Count", command=lambda: self.sort_by_column("Row Count", False))
+        self.tree.heading("Row Count", text="Row Count", command=lambda: self.sorter.sort_by_column("Row Count", False))
         self.tree.grid(row=1, column=0, columnspan=4, sticky=(tk.W, tk.E, tk.N, tk.S))
 
         self.scrollbar = ttk.Scrollbar(self.frame, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscroll=self.scrollbar.set)
         self.scrollbar.grid(row=1, column=4, sticky=(tk.N, tk.S))
+
+        self.sorter = TableSorter(self.tree)
 
     def run(self):
         self.root.mainloop()
@@ -58,10 +61,3 @@ class TableViewerApp:
         )
         self.db_path_entry.delete(0, tk.END)
         self.db_path_entry.insert(0, filename)
-
-    def sort_by_column(self, col, descending):
-        data = [(self.tree.set(child, col), child) for child in self.tree.get_children('')]
-        data.sort(reverse=descending)
-        for index, (val, child) in enumerate(data):
-            self.tree.move(child, '', index)
-        self.tree.heading(col, command=lambda: self.sort_by_column(col, not descending))

@@ -1,4 +1,4 @@
-from application.pages.table_viewer import TableViewerApp
+from .pages.table_viewer import TableViewerApp
 
 if __name__ == "__main__":
     app = TableViewerApp()
