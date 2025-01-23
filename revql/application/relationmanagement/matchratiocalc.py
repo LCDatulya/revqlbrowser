@@ -30,7 +30,7 @@ def find_matching_table_column_names(db_path):
             column_name = column[1]
             for t_name in table_names:
                 match_ratio = prefix_similarity(column_name, t_name)
-                if match_ratio > 0.55:
+                if match_ratio > 0.65:
                     key = (table_name, column_name, t_name)
                     if key not in matching_info or match_ratio > matching_info[key]:
                         matching_info[key] = match_ratio
