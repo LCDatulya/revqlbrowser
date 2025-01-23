@@ -1,6 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, filedialog
-from revql.application.utils.db_utils import get_table_data
+from application.utils.db_utils import get_table_data
 
 class TableViewerApp:
     def __init__(self):
