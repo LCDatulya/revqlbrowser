@@ -1,5 +1,14 @@
 import sqlite3
-from difflib import SequenceMatcher
+
+def prefix_similarity(str1, str2):
+    """Calculate the similarity ratio based on the common prefix length."""
+    common_length = 0
+    for c1, c2 in zip(str1, str2):
+        if c1 == c2:
+            common_length += 1
+        else:
+            break
+    return common_length / max(len(str1), len(str2))
 
 def find_matching_table_column_names(db_path):
     conn = sqlite3.connect(db_path)
@@ -10,8 +19,8 @@ def find_matching_table_column_names(db_path):
     tables = cursor.fetchall()
 
     table_names = [table[0] for table in tables]
-    matching_info = []
-
+    matching_info = {}
+    
     for table in tables:
         table_name = table[0]
         cursor.execute(f"PRAGMA table_info(\"{table_name}\");")
@@ -20,9 +29,11 @@ def find_matching_table_column_names(db_path):
         for column in columns:
             column_name = column[1]
             for t_name in table_names:
-                match_ratio = SequenceMatcher(None, column_name, t_name).ratio()
+                match_ratio = prefix_similarity(column_name, t_name)
                 if match_ratio > 0.55:
-                    matching_info.append((table_name, column_name, t_name, match_ratio))
+                    key = (table_name, column_name, t_name)
+                    if key not in matching_info or match_ratio > matching_info[key]:
+                        matching_info[key] = match_ratio
 
     conn.close()
-    return matching_info
+    return [(table, column, match_table, ratio) for (table, column, match_table), ratio in matching_info.items()]
