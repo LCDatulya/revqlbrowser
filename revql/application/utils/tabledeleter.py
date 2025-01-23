@@ -1,6 +1,6 @@
 import sqlite3
 
-def get_table_data(db_path):
+def delete_empty_tables(db_path):
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
@@ -8,15 +8,16 @@ def get_table_data(db_path):
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
     tables = cursor.fetchall()
 
-    table_data = []
+    empty_tables = []
 
     for table in tables:
         table_name = table[0]
         cursor.execute(f"SELECT COUNT(*) FROM \"{table_name}\";")
-        row_count = cursor.fetchone()[0]
-        cursor.execute(f"PRAGMA table_info(\"{table_name}\");")
-        col_count = len(cursor.fetchall())
-        table_data.append((table_name, row_count, col_count))
+        count = cursor.fetchone()[0]
+        if count == 0:
+            empty_tables.append(table_name)
+            cursor.execute(f"DROP TABLE \"{table_name}\";")
 
+    conn.commit()
     conn.close()
-    return table_data
+    return empty_tables
