@@ -1,11 +1,13 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import sqlite3
-from ..utils.db_utils import get_table_data
-from ..utils.tablecounter import count_tables
-from ..utils.tabledeleter import delete_empty_tables, delete_single_column_or_row_tables
-from ..utils.tablesorter import TableSorter
-from .tabledeletionpopup import confirm_delete_empty_tables
+from revql.application.utils.db_utils import get_table_data
+from revql.application.utils.tablecounter import count_tables
+from revql.application.utils.tabledeleter import delete_empty_tables, delete_single_column_or_row_tables
+from revql.application.utils.tablesorter import TableSorter
+from revql.application.pages.tabledeletionpopup import confirm_delete_empty_tables
+from revql.application.relationmanagement.matchratiocalc import find_matching_table_column_names
+from revql.application.pages.relationmanagementpage import RelationManagementPage
 
 class TableViewerApp:
     def __init__(self):
@@ -147,8 +149,11 @@ class TableViewerApp:
             messagebox.showwarning("No Database", "Please select a database first.")
             return
         
-        # Implement the logic to create relationships here
-        messagebox.showinfo("Create Relationships", "Relationships created successfully.")
+        matching_info = find_matching_table_column_names(db_path)
+        if matching_info:
+            RelationManagementPage(self.root, matching_info)
+        else:
+            messagebox.showinfo("No Matches", "No matching table-column names found.")
 
     def browse_files(self):
         filename = filedialog.askopenfilename(
