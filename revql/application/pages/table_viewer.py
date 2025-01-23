@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, filedialog
 from ..utils.db_utils import get_table_data
+from ..utils.tablecounter import count_tables
 from ..utils.tablesorter import TableSorter
 
 class TableViewerApp:
@@ -40,18 +41,24 @@ class TableViewerApp:
 
         self.sorter = TableSorter(self.tree)
 
+        self.table_count_label = ttk.Label(self.frame, text="Number of Tables: 0")
+        self.table_count_label.grid(row=2, column=0, columnspan=4, sticky=tk.W)
+
     def run(self):
         self.root.mainloop()
 
     def display_table_data(self):
         db_path = self.db_path_entry.get()
         table_data = get_table_data(db_path)
+        table_count = count_tables(db_path)
 
         for row in self.tree.get_children():
             self.tree.delete(row)
 
         for table_name, count in table_data:
             self.tree.insert("", "end", values=(table_name, count))
+
+        self.table_count_label.config(text=f"Number of Tables: {table_count}")
 
     def browse_files(self):
         filename = filedialog.askopenfilename(
