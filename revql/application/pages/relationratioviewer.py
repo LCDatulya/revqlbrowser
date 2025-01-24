@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from ..utils.tablesorter import TableSorter
-from ..utils.idrefactor import rename_id_columns_and_create_relations
+from ..relationmanagement.idrefactor import rename_id_columns_and_create_relations
 
 class RelationRatioViewer:
     def __init__(self, parent, matching_info, db_path):

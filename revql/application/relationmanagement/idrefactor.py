@@ -1,6 +1,6 @@
 import sqlite3
 import time
-from .db_connection import DatabaseConnection
+from ..utils.db_connection import DatabaseConnection
 
 def rename_id_columns(db):
     cursor = db.cursor
