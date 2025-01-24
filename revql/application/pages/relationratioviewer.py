@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import ttk
 from ..utils.tablesorter import TableSorter
 
-class RelationManagementPage:
+class RelationRatioViewer:
     def __init__(self, parent, matching_info):
         self.top = tk.Toplevel(parent)
         self.top.title("Manage Relationships")
@@ -30,6 +30,8 @@ class RelationManagementPage:
             self.tree.insert("", "end", values=(table, column, match_table, f"{ratio:.2f}"))
 
         self.sorter = TableSorter(self.tree)
+        
+        self.sorter.sort_by_column("Table", True, 'numeric')
 
         self.close_button = ttk.Button(self.frame, text="Close", command=self.top.destroy)
         self.close_button.grid(row=1, column=0, sticky=tk.E)

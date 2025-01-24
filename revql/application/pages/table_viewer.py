@@ -7,7 +7,7 @@ from revql.application.utils.tabledeleter import delete_empty_tables, delete_sin
 from revql.application.utils.tablesorter import TableSorter
 from revql.application.pages.tabledeletionpopup import confirm_delete_empty_tables
 from revql.application.relationmanagement.matchratiocalc import find_matching_table_column_names
-from revql.application.pages.relationmanagementpage import RelationManagementPage
+from revql.application.pages.relationratioviewer import RelationRatioViewer
 
 class TableViewerApp:
     def __init__(self):
@@ -151,7 +151,7 @@ class TableViewerApp:
         
         matching_info = find_matching_table_column_names(db_path)
         if matching_info:
-            RelationManagementPage(self.root, matching_info)
+            RelationRatioViewer(self.root, matching_info)
         else:
             messagebox.showinfo("No Matches", "No matching table-column names found.")
 
