@@ -31,7 +31,7 @@ class RelationRatioViewer:
 
         self.sorter = TableSorter(self.tree)
         
-        self.sorter.sort_by_column("Table", True, 'numeric')
+        self.sorter.sort_by_column("Match Ratio", True, 'numeric')
 
         self.close_button = ttk.Button(self.frame, text="Close", command=self.top.destroy)
         self.close_button.grid(row=1, column=0, sticky=tk.E)
