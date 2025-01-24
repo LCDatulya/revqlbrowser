@@ -31,9 +31,25 @@ def find_matching_table_column_names(db_path):
             for t_name in table_names:
                 match_ratio = prefix_similarity(column_name, t_name)
                 if match_ratio > 0.65:
-                    key = (table_name, column_name, t_name)
-                    if key not in matching_info or match_ratio > matching_info[key]:
-                        matching_info[key] = match_ratio
+                    # Check if data in the matched column exists in the id or Id column of the matching table
+                    cursor.execute(f"SELECT {column_name} FROM {table_name}")
+                    column_data = cursor.fetchall()
+                    column_data = [item[0] for item in column_data]
+
+                    # Check if the id or Id column exists in the matching table
+                    cursor.execute(f"PRAGMA table_info(\"{t_name}\");")
+                    columns_info = cursor.fetchall()
+                    id_column_exists = any(col[1] in ['id', 'Id'] for col in columns_info)
+
+                    if id_column_exists:
+                        cursor.execute(f"SELECT id FROM {t_name} UNION SELECT Id FROM {t_name}")
+                        id_data = cursor.fetchall()
+                        id_data = [item[0] for item in id_data]
+
+                        if any(data in id_data for data in column_data):
+                            key = (table_name, column_name, t_name, match_ratio)
+                            if key not in matching_info or match_ratio > matching_info[key]:
+                                matching_info[key] = match_ratio
 
     conn.close()
-    return [(table, column, match_table, ratio) for (table, column, match_table), ratio in matching_info.items()]
+    return matching_info
