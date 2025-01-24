@@ -1,4 +1,4 @@
-import sqlite3
+from ..utils.db_connection import DatabaseConnection
 
 def prefix_similarity(str1, str2):
     """Calculate the similarity ratio based on the common prefix length."""
@@ -11,8 +11,8 @@ def prefix_similarity(str1, str2):
     return common_length / max(len(str1), len(str2))
 
 def find_matching_table_column_names(db_path):
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
+    db = DatabaseConnection(db_path)
+    cursor = db.cursor
 
     # Get the list of all tables
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
@@ -52,5 +52,4 @@ def find_matching_table_column_names(db_path):
                             if key not in matching_info or match_ratio > matching_info[key]:
                                 matching_info[key] = match_ratio
 
-    conn.close()
     return matching_info

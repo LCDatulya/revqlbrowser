@@ -1,6 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-import sqlite3
+from revql.application.utils.db_connection import DatabaseConnection
 from revql.application.utils.db_utils import get_table_data
 from revql.application.utils.tablecounter import count_tables
 from revql.application.utils.tabledeleter import delete_empty_tables, delete_single_column_or_row_tables
@@ -64,6 +64,7 @@ class TableViewerApp:
 
     def display_table_data(self):
         db_path = self.db_path_entry.get()
+        db = DatabaseConnection(db_path)
         table_data = get_table_data(db_path)
         table_count = count_tables(db_path)
 
@@ -88,8 +89,8 @@ class TableViewerApp:
             self.delete_single_column_or_row_tables()
 
     def get_empty_tables(self, db_path):
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
+        db = DatabaseConnection(db_path)
+        cursor = db.cursor
 
         # Get the list of all tables
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
@@ -104,12 +105,11 @@ class TableViewerApp:
             if count == 0:
                 empty_tables.append(table_name)
 
-        conn.close()
         return empty_tables
 
     def get_single_column_or_row_tables(self, db_path):
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
+        db = DatabaseConnection(db_path)
+        cursor = db.cursor
 
         # Get the list of all tables
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
@@ -126,7 +126,6 @@ class TableViewerApp:
             if row_count == 1 or col_count == 1:
                 single_column_or_row_tables.append(table_name)
 
-        conn.close()
         return single_column_or_row_tables
 
     def delete_empty_tables(self):
