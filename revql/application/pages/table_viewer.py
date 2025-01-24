@@ -40,7 +40,7 @@ class TableViewerApp:
         self.delete_single_column_or_row_button = ttk.Button(self.frame, text="Delete Single Column/Row Tables", command=self.confirm_delete_single_column_or_row_tables)
         self.delete_single_column_or_row_button.grid(row=0, column=5, sticky=tk.W)
 
-        self.create_relationships_button = ttk.Button(self.frame, text="Create Relationships", command=self.create_relationships)
+        self.create_relationships_button = ttk.Button(self.frame, text="View Relations", command=self.create_relationships)
         self.create_relationships_button.grid(row=0, column=6, sticky=tk.W)
 
         self.columns = ("Table Name", "Row Count", "Column Count")
@@ -151,7 +151,7 @@ class TableViewerApp:
         
         matching_info = find_matching_table_column_names(db_path)
         if matching_info:
-            RelationRatioViewer(self.root, matching_info)
+            RelationRatioViewer(self.root, matching_info, db_path)
         else:
             messagebox.showinfo("No Matches", "No matching table-column names found.")
 

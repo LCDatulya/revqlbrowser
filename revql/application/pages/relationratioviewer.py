@@ -1,11 +1,14 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 from ..utils.tablesorter import TableSorter
+from ..utils.idrefactor import rename_id_columns_and_create_relations
 
 class RelationRatioViewer:
-    def __init__(self, parent, matching_info):
+    def __init__(self, parent, matching_info, db_path):
         self.top = tk.Toplevel(parent)
         self.top.title("Manage Relationships")
+        self.db_path = db_path
+        self.matching_info = matching_info
 
         self.frame = ttk.Frame(self.top, padding="10")
         self.frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
@@ -30,8 +33,14 @@ class RelationRatioViewer:
             self.tree.insert("", "end", values=(table, column, match_table, f"{ratio:.2f}"))
 
         self.sorter = TableSorter(self.tree)
-        
         self.sorter.sort_by_column("Match Ratio", True, 'numeric')
 
+        self.create_relations_button = ttk.Button(self.frame, text="Create Relations", command=self.create_relations)
+        self.create_relations_button.grid(row=1, column=0, sticky=tk.W)
+
         self.close_button = ttk.Button(self.frame, text="Close", command=self.top.destroy)
-        self.close_button.grid(row=1, column=0, sticky=tk.E)
+        self.close_button.grid(row=1, column=1, sticky=tk.E)
+
+    def create_relations(self):
+        rename_id_columns_and_create_relations(self.db_path, self.matching_info)
+        messagebox.showinfo("Success", "ID columns renamed and relations created successfully.")

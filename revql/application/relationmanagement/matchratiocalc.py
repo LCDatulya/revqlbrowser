@@ -39,12 +39,13 @@ def find_matching_table_column_names(db_path):
                     # Check if the id or Id column exists in the matching table
                     cursor.execute(f"PRAGMA table_info(\"{t_name}\");")
                     columns_info = cursor.fetchall()
-                    id_column_exists = any(col[1] in ['id', 'Id'] for col in columns_info)
+                    id_columns = [col[1] for col in columns_info if col[1].lower() == 'id' or col[1].lower().endswith('id')]
 
-                    if id_column_exists:
-                        cursor.execute(f"SELECT id FROM {t_name} UNION SELECT Id FROM {t_name}")
-                        id_data = cursor.fetchall()
-                        id_data = [item[0] for item in id_data]
+                    if id_columns:
+                        id_data = []
+                        for id_column in id_columns:
+                            cursor.execute(f"SELECT {id_column} FROM {t_name}")
+                            id_data.extend([item[0] for item in cursor.fetchall()])
 
                         if any(data in id_data for data in column_data):
                             key = (table_name, column_name, t_name, match_ratio)
