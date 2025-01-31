@@ -1,25 +1,27 @@
 import sqlite3
 
 class DatabaseConnection:
-    _instance = None
+    def __init__(self, db_path):
+        self._conn = None
+        self._cursor = None
+        self._db_path = db_path
+        self.connect()
 
-    def __new__(cls, db_path):
-        if cls._instance is None:
-            cls._instance = super(DatabaseConnection, cls).__new__(cls)
-            cls._instance._db_path = db_path
-            cls._instance._conn = sqlite3.connect(db_path)
-            cls._instance._cursor = cls._instance._conn.cursor()
-        return cls._instance
-
-    @property
-    def cursor(self):
-        return self._instance._cursor
+    def connect(self):
+        try:
+            self._conn = sqlite3.connect(self._db_path)
+            self._cursor = self._conn.cursor()
+        except sqlite3.Error as e:
+            print(f"Error connecting to database: {e}")
+            self._conn = None
+            self._cursor = None
 
     def commit(self):
-        self._instance._conn.commit()
+        if self._conn:
+            self._conn.commit()
 
     def close(self):
-        self._instance._conn.close()
-        DatabaseConnection._instance = None
-        
-        
+        if self._conn:
+            self._conn.close()
+            self._conn = None
+            self._cursor = None

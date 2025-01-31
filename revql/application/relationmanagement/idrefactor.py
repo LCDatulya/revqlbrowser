@@ -144,7 +144,7 @@ def rename_id_columns_and_create_relations(db_path: str, matching_info):
                 
                 # Include new primary key column in INSERT if it was added
                 if not has_primary_key:
-                    source_cols.insert(0, '(SELECT COALESCE(MAX("{table_id_column}"), 0) + ROW_NUMBER() OVER () FROM "{table_name}")')
+                    source_cols.insert(0, f'(SELECT COALESCE(MAX("{table_id_column}"), 0) + ROW_NUMBER() OVER () FROM "{table_name}")')
                 
                 insert_sql = f"""
                     INSERT INTO "{new_table_name}" ({', '.join(source_cols)}, "{match_table_id}")
@@ -170,4 +170,4 @@ def rename_id_columns_and_create_relations(db_path: str, matching_info):
         
     except Exception as e:
         db.rollback()
-        raise 
+        raise

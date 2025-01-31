@@ -12,7 +12,7 @@ def prefix_similarity(str1, str2):
 
 def find_matching_table_column_names(db_path):
     db = DatabaseConnection(db_path)
-    cursor = db.cursor
+    cursor = db._cursor
 
     # Get the list of all tables
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
