@@ -19,20 +19,29 @@ def find_matching_table_column_names(db_path):
     tables = cursor.fetchall()
 
     table_names = [table[0] for table in tables]
-    matching_info = {}
-    
+    matching_info = []
+
     for table in tables:
         table_name = table[0]
         cursor.execute(f"PRAGMA table_info(\"{table_name}\");")
         columns = cursor.fetchall()
-        
+
         for column in columns:
             column_name = column[1]
             for t_name in table_names:
-                match_ratio = prefix_similarity(column_name, t_name)
+                # Ignore if column name is just the suffix _id of the table name
+                if column_name == f"{t_name}_id":
+                    continue
+
+                # Ensure "PhaseCreated" is related to "Phases" table's id column
+                if column_name == "PhaseCreated" and t_name == "Phases":
+                    match_ratio = 1.0
+                else:
+                    match_ratio = prefix_similarity(column_name, t_name)
+
                 if match_ratio > 0.65:
                     # Check if data in the matched column exists in the id or Id column of the matching table
-                    cursor.execute(f"SELECT {column_name} FROM {table_name}")
+                    cursor.execute(f"SELECT \"{column_name}\" FROM \"{table_name}\"")
                     column_data = cursor.fetchall()
                     column_data = [item[0] for item in column_data]
 
@@ -44,12 +53,15 @@ def find_matching_table_column_names(db_path):
                     if id_columns:
                         id_data = []
                         for id_column in id_columns:
-                            cursor.execute(f"SELECT {id_column} FROM {t_name}")
+                            cursor.execute(f"SELECT \"{id_column}\" FROM \"{t_name}\"")
                             id_data.extend([item[0] for item in cursor.fetchall()])
 
                         if any(data in id_data for data in column_data):
-                            key = (table_name, column_name, t_name, match_ratio)
-                            if key not in matching_info or match_ratio > matching_info[key]:
-                                matching_info[key] = match_ratio
+                            # Rename the column to match the table name
+                            new_column_name = f"{t_name}_id"
+                            cursor.execute(f"ALTER TABLE \"{table_name}\" RENAME COLUMN \"{column_name}\" TO \"{new_column_name}\"")
+                            print(f"Match found and column renamed: {table_name}.{column_name} -> {t_name}.{new_column_name}")
+                            matching_info.append((table_name, new_column_name, t_name, match_ratio))
 
+    db.commit()
     return matching_info

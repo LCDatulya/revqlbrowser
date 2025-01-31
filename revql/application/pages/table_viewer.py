@@ -7,6 +7,7 @@ from revql.application.utils.tablesorter import TableSorter
 from revql.application.pages.tabledeletionpopup import confirm_delete_empty_tables
 from revql.application.relationmanagement.matchratiocalc import find_matching_table_column_names
 from revql.application.pages.relationratioviewer import RelationRatioViewer
+from revql.application.pages.column_viewer import ColumnViewer
 
 class TableViewerApp:
     def __init__(self):
@@ -52,6 +53,8 @@ class TableViewerApp:
         self.table_count_label = ttk.Label(self.frame, text="Number of Tables: 0")
         self.table_count_label.grid(row=2, column=0, columnspan=5, sticky=tk.W)
 
+        self.tree.bind("<Double-1>", self.on_table_double_click)
+
     def run(self):
         self.root.mainloop()
 
@@ -89,3 +92,20 @@ class TableViewerApp:
         )
         self.db_path_entry.delete(0, tk.END)
         self.db_path_entry.insert(0, filename)
+
+    def on_table_double_click(self, event):
+        item = self.tree.selection()[0]
+        table_name = self.tree.item(item, "values")[0]
+        self.show_columns_window(table_name)
+
+    def show_columns_window(self, table_name):
+        db_path = self.db_path_entry.get()
+        if not db_path:
+            messagebox.showwarning("No Database", "Please select a database first.")
+            return
+
+        ColumnViewer(self.root, db_path, table_name)
+
+if __name__ == "__main__":
+    app = TableViewerApp()
+    app.run()
