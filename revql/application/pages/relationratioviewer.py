@@ -46,8 +46,11 @@ class RelationRatioViewer:
         self.create_relations_button = ttk.Button(self.frame, text="Create Relations", command=self.create_relations)
         self.create_relations_button.grid(row=1, column=0, sticky=tk.W)
 
+        self.check_relations_button = ttk.Button(self.frame, text="Check Relations", command=self.check_relations)
+        self.check_relations_button.grid(row=1, column=1, sticky=tk.W)
+
         self.close_button = ttk.Button(self.frame, text="Close", command=self.top.destroy)
-        self.close_button.grid(row=1, column=1, sticky=tk.E)
+        self.close_button.grid(row=1, column=2, sticky=tk.E)
 
     def create_relations(self):
         try:
@@ -83,6 +86,54 @@ class RelationRatioViewer:
                 rename_id_columns_and_create_relations(self.db_path, self.matching_info)
                 messagebox.showinfo("Success", 
                     "Operations completed successfully:\n- Empty tables deleted\n- Empty columns deleted\n- Relations created")
+                
+            finally:
+                db.close()
+                
+        except Exception as e:
+            messagebox.showerror("Error", f"An error occurred: {str(e)}")
+            raise
+
+    def check_relations(self):
+        try:
+            db = DatabaseConnection(self.db_path)
+            
+            try:
+                cursor = db.cursor
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+                tables = cursor.fetchall()
+                
+                for table in tables:
+                    table_name = table[0]
+                    
+                    # Skip sqlite_sequence table
+                    if table_name == 'sqlite_sequence':
+                        continue
+                    
+                    cursor.execute(f"PRAGMA foreign_key_list(\"{table_name}\");")
+                    foreign_keys = cursor.fetchall()
+                    
+                    for fk in foreign_keys:
+                        fk_table = fk[2]
+                        fk_column = fk[3]
+                        pk_column = fk[4]
+                        
+                        cursor.execute(f"SELECT {fk_column} FROM {table_name}")
+                        fk_data = cursor.fetchall()
+                        fk_data = [item[0] for item in fk_data]
+                        
+                        cursor.execute(f"SELECT {pk_column} FROM {fk_table}")
+                        pk_data = cursor.fetchall()
+                        pk_data = [item[0] for item in pk_data]
+                        
+                        if not all(data in pk_data for data in fk_data):
+                            # Fix incorrect relation
+                            cursor.execute(f"ALTER TABLE {table_name} DROP COLUMN {fk_column}")
+                            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {fk_column} INTEGER REFERENCES {fk_table}({pk_column})")
+                            messagebox.showinfo("Fixed Relation", f"Fixed relation between {table_name}.{fk_column} and {fk_table}.{pk_column}")
+                
+                db.commit()
+                messagebox.showinfo("Success", "Relations checked and fixed successfully.")
                 
             finally:
                 db.close()
