@@ -21,3 +21,5 @@ class DatabaseConnection:
     def close(self):
         self._instance._conn.close()
         DatabaseConnection._instance = None
+        
+        

@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from revql.application.utils.db_connection import DatabaseConnection
-from revql.application.utils.columndeleter import delete_empty_columns
+from revql.application.utils.db_utils import delete_empty_columns
 
 class ColumnViewer:
     def __init__(self, parent, db_path, table_name):

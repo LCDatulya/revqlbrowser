@@ -1,8 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from revql.application.utils.db_connection import DatabaseConnection
-from revql.application.utils.db_utils import get_table_data
-from revql.application.utils.tablecounter import count_tables
+from revql.application.utils.db_utils import get_table_data, count_tables
 from revql.application.utils.tablesorter import TableSorter
 from revql.application.pages.tabledeletionpopup import confirm_delete_empty_tables
 from revql.application.relationmanagement.matchratiocalc import find_matching_table_column_names

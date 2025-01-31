@@ -2,9 +2,9 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from ..utils.tablesorter import TableSorter
 from ..relationmanagement.idrefactor import rename_id_columns_and_create_relations
-from ..utils.tabledeleter import delete_empty_tables
-from ..utils.columndeleter import delete_empty_columns
+from ..utils.db_utils import delete_empty_columns, delete_empty_tables
 from ..utils.db_connection import DatabaseConnection
+from ..relationmanagement.projectmanagement import ensure_project_information_id
 
 class RelationRatioViewer:
     def __init__(self, parent, matching_info, db_path):
@@ -81,8 +81,12 @@ class RelationRatioViewer:
     
                 # Create relations
                 rename_id_columns_and_create_relations(self.db_path, self.matching_info)
+                
+                # Ensure every table has ProjectInformation_id column
+                ensure_project_information_id(self.db_path)
+                
                 messagebox.showinfo("Success", 
-                    "Operations completed successfully:\n- Empty tables deleted\n- Empty columns deleted\n- Relations created")
+                    "Operations completed successfully:\n- Empty tables deleted\n- Empty columns deleted\n- Relations created\n- ProjectInformation_id added")
                 
             finally:
                 db.close()
