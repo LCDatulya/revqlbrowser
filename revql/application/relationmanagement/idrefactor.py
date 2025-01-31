@@ -88,12 +88,12 @@ def rename_id_columns_and_create_relations(db_path: str, matching_info):
             if table_name == match_table:
                 continue
             
-            # Verify match table exists and has id or primary key column
+            # Verify match table exists and has id column
             cursor.execute(f'PRAGMA table_info("{match_table}");')
             match_columns = cursor.fetchall()
-            match_table_id = next((col[1] for col in match_columns if col[1].lower() == 'id' or col[5] == 1), None)
+            match_table_id = f"{match_table}_id"
             
-            if not match_table_id:
+            if match_table_id not in {col[1] for col in match_columns}:
                 continue
                 
             # Skip if constraints already exist
@@ -170,4 +170,4 @@ def rename_id_columns_and_create_relations(db_path: str, matching_info):
         
     except Exception as e:
         db.rollback()
-        raise
+        raise 
