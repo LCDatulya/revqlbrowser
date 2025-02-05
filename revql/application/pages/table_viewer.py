@@ -33,7 +33,7 @@ class TableViewerApp:
         self.fetch_button = ttk.Button(self.frame, text="Fetch Table Data", command=self.display_table_data)
         self.fetch_button.grid(row=0, column=3, sticky=tk.W)
 
-        self.create_relationships_button = ttk.Button(self.frame, text="View Relations", command=self.create_relationships)
+        self.create_relationships_button = ttk.Button(self.frame, text="Create Relations", command=self.create_relationships)
         self.create_relationships_button.grid(row=0, column=4, sticky=tk.W)
 
         self.columns = ("Table Name", "Row Count", "Column Count")
