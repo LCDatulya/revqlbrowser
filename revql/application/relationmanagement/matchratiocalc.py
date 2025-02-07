@@ -1,4 +1,5 @@
 from ..utils.db_connection import DatabaseConnection
+from ..utils.db_utils import delete_empty_tables, delete_empty_columns
 import sqlite3
 
 def prefix_similarity(str1, str2):
@@ -34,6 +35,15 @@ def prefix_similarity(str1, str2):
 def find_matching_table_column_names(db_path):
     db = DatabaseConnection(db_path)
     cursor = db._cursor
+
+    # Delete empty tables and columns
+    delete_empty_tables(db_path)
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+    tables = cursor.fetchall()
+    for table in tables:
+        table_name = table[0]
+        if table_name != 'sqlite_sequence':
+            delete_empty_columns(db_path, table_name)
 
     # Get the list of all tables
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
@@ -71,9 +81,10 @@ def find_matching_table_column_names(db_path):
                     # Calculate similarity
                     match_ratio = prefix_similarity(column_name.lower(), t_name.lower())
 
-                print(f"Checking {table_name}.{column_name} against {t_name}: ratio = {match_ratio}")
+                if match_ratio > 0.5:
+                    print(f"Checking {table_name}.{column_name} against {t_name}: ratio = {match_ratio}")
 
-                if match_ratio > 0.65:
+                if match_ratio > 0.5:
                     try:
                         # Check if data in the matched column exists in the matching table
                         cursor.execute(f"SELECT DISTINCT \"{column_name}\" FROM \"{table_name}\" WHERE \"{column_name}\" IS NOT NULL")

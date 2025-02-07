@@ -36,7 +36,8 @@ class RelationRatioViewer:
 
         # Populate data
         for table, column, match_table, ratio in matching_info:
-            self.tree.insert("", "end", values=(table, column, match_table, f"{ratio:.2f}"))
+            if ratio > 0.5:
+                self.tree.insert("", "end", values=(table, column, match_table, f"{ratio:.2f}"))
 
         # Initialize sorter
         self.sorter = TableSorter(self.tree)

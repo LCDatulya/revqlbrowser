@@ -170,4 +170,4 @@ def rename_id_columns_and_create_relations(db_path: str, matching_info):
         
     except Exception as e:
         db.rollback()
-        raise
+        raise e
