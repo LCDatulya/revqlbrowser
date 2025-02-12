@@ -127,134 +127,105 @@ def rename_id_columns_and_create_relations(db_path: str, matching_info):
         relations_by_table = {}
         for match in matching_info:
             if len(match) < 3:
-                continue  # Skip invalid entries
-            table_name, column_name, match_table = match[:3]  # Unpack the first three elements
+                continue
+            table_name, column_name, match_table = match[:3]
             if table_name == match_table:
                 continue
             relations_by_table.setdefault(table_name, []).append((column_name, match_table))
 
-        # --- Step 4: For each source table, rebuild the table with all its foreign key columns ---
-        for table_name, relations in relations_by_table.items():
-            try:
-                cursor = db.cursor
-                cursor.execute(f'PRAGMA table_info("{table_name}");')
-                current_columns = cursor.fetchall()
-                # Identify columns to keep (skip each column that is to be replaced by a foreign key)
-                skip_columns = {col_name for col_name, _ in relations}
-                kept_columns = [col for col in current_columns if col[1] not in skip_columns]
-
-                # Build new table definition
-                new_col_defs = []
-                table_pk = f"{table_name}_id"
-                has_pk = any(col[5] == 1 for col in current_columns)
-                # Ensure the primary key column is present.
-                if not any(col[1].lower() == table_pk.lower() for col in kept_columns):
-                    new_col_defs.append(f'"{table_pk}" INTEGER PRIMARY KEY AUTOINCREMENT')
-                else:
-                    for col in kept_columns:
-                        if col[1].lower() == table_pk.lower():
-                            new_col_defs.append(f'"{col[1]}" {col[2]} PRIMARY KEY AUTOINCREMENT')
-                        else:
-                            new_col_defs.append(f'"{col[1]}" {col[2]}')
-
-                # Add ProjectInformation_id column
-                if 'projectinformation_id' not in {col[1].lower() for col in current_columns}:
-                    new_col_defs.append('"ProjectInformation_id" INTEGER')
-
-                # For each relation, add a foreign key column.
-                # The new FK column is named the same as the id of the reference table.
-                fk_columns = []
-                for column, match_table in relations:
-                    fk_col = f"{match_table}_id"
-                    new_col_defs.append(f'"{fk_col}" INTEGER REFERENCES "{match_table}"("{fk_col}")')
-                    fk_columns.append((column, fk_col, match_table))
-
-                # Add foreign key constraint for ProjectInformation_id
-                new_col_defs.append('FOREIGN KEY("ProjectInformation_id") REFERENCES "ProjectInformation"("ProjectInformation_id")')
-
-                new_table = f"{table_name}_new"
-                create_sql = f'CREATE TABLE "{new_table}" ({", ".join(new_col_defs)});'
-                execute_with_retry(db, create_sql)
-
-                # --- Step 5: Migrate data from the old table into the new table ---
-                # Prepare the list of columns to copy directly.
-                kept_names = [col[1] for col in kept_columns]
-                # Build the INSERT column list:
-                insert_cols = kept_names + [fk for (_, fk, _) in fk_columns] + ['ProjectInformation_id']
-                insert_cols_sql = ', '.join(f'"{col}"' for col in insert_cols)
-
-                # Build the SELECT for the kept columns.
-                # Alias the old table as "t" so that subqueries can reference its columns.
-                select_parts = [f't."{col}"' for col in kept_names]
-                # For each relation, use a correlating subquery to retrieve the matching foreign key value.
-                for column, fk_col, match_table in fk_columns:
-                    match_table_fk = f"{match_table}_id"
-                    subquery = f"""(
-                        SELECT mt."{match_table_fk}"
-                        FROM "{match_table}" AS mt
-                        WHERE CAST(mt."{match_table_fk}" AS TEXT) = CAST(t."{column}" AS TEXT)
-                        LIMIT 1
-                    )"""
-                    select_parts.append(subquery)
-
-                # Add ProjectInformation_id to the SELECT
-                select_parts.append('NULL AS "ProjectInformation_id"')
-
-                select_sql = ', '.join(select_parts)
-                insert_sql = f'INSERT INTO "{new_table}" ({insert_cols_sql}) SELECT {select_sql} FROM "{table_name}" AS t;'
-                logging.info(f"Executing SQL: {insert_sql}")
-                execute_with_retry(db, insert_sql)
-
-                # Replace the old table with the new one.
-                execute_with_retry(db, f'DROP TABLE "{table_name}";')
-                execute_with_retry(db, f'ALTER TABLE "{new_table}" RENAME TO "{table_name}";')
-
-                db.commit()
-            except Exception as e:
-                logging.error(f"Error processing table {table_name}: {e}")
-                db.rollback()
-                continue  # Continue with the next table
-
-        # --- Step 6: Add ProjectInformation_id foreign key to all tables without relations ---
+        # --- Step 4: Process each table to add foreign key constraints ---
         for table in tables:
             table_name = table[0]
             if table_name in ['ProjectInformation', 'sqlite_sequence']:
                 continue
 
-            cursor.execute(f'PRAGMA table_info("{table_name}");')
-            columns = cursor.fetchall()
-            column_names = [col[1] for col in columns]
-
-            if 'ProjectInformation_id' not in column_names:
-                cursor.execute(f'ALTER TABLE "{table_name}" ADD COLUMN "ProjectInformation_id" INTEGER')
-
-            # Create new table with foreign key constraint
-            new_columns = [f'"{col[1]}" {col[2]}' for col in columns]
-            new_columns.append('"ProjectInformation_id" INTEGER')
-            cursor.execute(f'''
-                CREATE TABLE "{table_name}_new" (
-                    {", ".join(new_columns)},
-                    FOREIGN KEY("ProjectInformation_id") REFERENCES "ProjectInformation"("ProjectInformation_id")
-                )
-            ''')
-
-            # Insert data into new table
-            old_columns = [f'"{col}"' for col in column_names]
             try:
-                cursor.execute(f'''
-                    INSERT INTO "{table_name}_new" ({", ".join(old_columns)}, "ProjectInformation_id")
-                    SELECT {", ".join(old_columns)}, "ProjectInformation_id"
-                    FROM "{table_name}"
-                ''')
+                # Get current table structure
+                cursor.execute(f'PRAGMA table_info("{table_name}");')
+                columns = cursor.fetchall()
+                
+                # Get columns that will become foreign keys
+                skip_columns = set()
+                if table_name in relations_by_table:
+                    skip_columns = {col[0] for col, _ in relations_by_table[table_name]}
+                
+                # Build new table definition
+                new_col_defs = []
+                
+                # Process existing columns
+                for col in columns:
+                    if (col[1].lower() != 'projectinformation_id' and 
+                        col[1] not in skip_columns):
+                        new_col_defs.append(f'"{col[1]}" {col[2]}')
+                
+                # Add ProjectInformation_id column
+                new_col_defs.append('"ProjectInformation_id" INTEGER')
+                
+                # Add foreign key columns
+                fk_columns = []
+                if table_name in relations_by_table:
+                    for orig_column, match_table in relations_by_table[table_name]:
+                        fk_col = f"{match_table}_id"
+                        new_col_defs.append(f'"{fk_col}" INTEGER')
+                        fk_columns.append((orig_column, fk_col, match_table))
+                
+                # Add foreign key constraints
+                new_col_defs.append('FOREIGN KEY("ProjectInformation_id") REFERENCES "ProjectInformation"("ProjectInformation_id")')
+                for _, fk_col, match_table in fk_columns:
+                    new_col_defs.append(f'FOREIGN KEY("{fk_col}") REFERENCES "{match_table}"("{match_table}_id")')
+                
+                # Create new table
+                new_table = f"{table_name}_new"
+                create_sql = f'CREATE TABLE "{new_table}" ({", ".join(new_col_defs)})'
+                cursor.execute(create_sql)
+                
+                # Prepare columns for data migration
+                kept_columns = [col[1] for col in columns 
+                              if col[1].lower() != 'projectinformation_id' 
+                              and col[1] not in skip_columns]
+                
+                # Build SELECT statement
+                select_parts = []
+                # Add kept columns
+                select_parts.extend(f't."{col}"' for col in kept_columns)
+                
+                # Add foreign key lookups
+                for orig_column, fk_col, match_table in fk_columns:
+                    select_parts.append(f'''(
+                        SELECT m."{match_table}_id" 
+                        FROM "{match_table}" m 
+                        WHERE CAST(m."{match_table}_id" AS TEXT) = CAST(t."{orig_column}" AS TEXT) 
+                        LIMIT 1
+                    ) AS "{fk_col}"''')
+                
+                # Add ProjectInformation_id
+                select_parts.append('t.ProjectInformation_id')
+                
+                # Build INSERT columns list
+                insert_cols = []
+                insert_cols.extend(f'"{col}"' for col in kept_columns)
+                insert_cols.extend(f'"{fk[1]}"' for fk in fk_columns)
+                insert_cols.append('"ProjectInformation_id"')
+                
+                # Execute INSERT
+                insert_sql = f'''
+                    INSERT INTO "{new_table}" ({", ".join(insert_cols)})
+                    SELECT {", ".join(select_parts)}
+                    FROM "{table_name}" t
+                '''
+                cursor.execute(insert_sql)
+                
+                # Replace old table with new one
+                cursor.execute(f'DROP TABLE "{table_name}"')
+                cursor.execute(f'ALTER TABLE "{new_table}" RENAME TO "{table_name}"')
+                
+                db.commit()
+                
             except sqlite3.OperationalError as e:
-                logging.warning(f"Skipping duplicate column in {table_name}: {e}")
+                logging.warning(f"Error processing table {table_name}: {e}")
+                cursor.execute(f'DROP TABLE IF EXISTS "{table_name}_new"')
+                db.commit()
                 continue
-
-            # Drop old table and rename new table
-            cursor.execute(f'DROP TABLE "{table_name}"')
-            cursor.execute(f'ALTER TABLE "{table_name}_new" RENAME TO "{table_name}"')
-
-        db.commit()
 
     except Exception as e:
         db.rollback()
