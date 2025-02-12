@@ -215,6 +215,38 @@ def rename_id_columns_and_create_relations(db_path: str, matching_info):
                 db.rollback()
                 continue  # Continue with the next table
 
+        # --- Step 6: Add ProjectInformation_id foreign key to all tables without relations ---
+        for table in tables:
+            table_name = table[0]
+            if table_name in ['ProjectInformation', 'sqlite_sequence']:
+                continue
+
+            cursor.execute(f'PRAGMA table_info("{table_name}");')
+            columns = cursor.fetchall()
+            column_names = [col[1] for col in columns]
+
+            if 'ProjectInformation_id' not in column_names:
+                cursor.execute(f'ALTER TABLE "{table_name}" ADD COLUMN "ProjectInformation_id" INTEGER')
+                cursor.execute(f'''
+                    CREATE TABLE "{table_name}_temp" AS 
+                    SELECT * FROM "{table_name}";
+                ''')
+                cursor.execute(f'''
+                    DROP TABLE "{table_name}";
+                ''')
+                cursor.execute(f'''
+                    CREATE TABLE "{table_name}" AS 
+                    SELECT * FROM "{table_name}_temp";
+                ''')
+                cursor.execute(f'''
+                    ALTER TABLE "{table_name}" ADD FOREIGN KEY("ProjectInformation_id") REFERENCES "ProjectInformation"("ProjectInformation_id");
+                ''')
+                cursor.execute(f'''
+                    DROP TABLE "{table_name}_temp";
+                ''')
+
+        db.commit()
+
     except Exception as e:
         db.rollback()
         raise e
