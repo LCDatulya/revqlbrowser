@@ -16,7 +16,20 @@ class RenameTracker:
             self.renamed_columns[table] = set()
         self.renamed_columns[table].add(column)
 
-def rename_id_columns(db, tracker: RenameTracker):
+def execute_with_retry(db, sql, max_retries=3):
+    retries = 0
+    while retries < max_retries:
+        try:
+            db.cursor.execute(sql)
+            db.commit()
+            return
+        except sqlite3.Error as e:
+            retries += 1
+            time.sleep(0.5)
+            if retries >= max_retries:
+                raise e
+
+def rename_id_columns(db, tracker):
     cursor = db.cursor
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
     tables = cursor.fetchall()
@@ -39,135 +52,143 @@ def rename_id_columns(db, tracker: RenameTracker):
                             RENAME COLUMN "{column_name}" TO "{new_column_name}";
                         """)
                         tracker.track_rename(table_name, new_column_name)
+                        logging.info(f"Renamed column '{column_name}' to '{new_column_name}' in table '{table_name}'")
                     except sqlite3.OperationalError as e:
                         logging.warning(f"Could not rename column in {table_name}: {e}")
+
+                # Ensure the new column is a primary key
+                try:
+                    # Create a new table with the primary key constraint
+                    temp_table = f"{table_name}_temp"
+                    column_defs = []
+                    for col in columns:
+                        if col[1].lower() == 'id':
+                            column_defs.append(f'"{new_column_name}" INTEGER PRIMARY KEY AUTOINCREMENT')
+                        else:
+                            column_defs.append(f'"{col[1]}" {col[2]}')
+                    
+                    cursor.execute(f"""
+                        CREATE TABLE "{temp_table}" (
+                            {', '.join(column_defs)}
+                        );
+                    """)
+                    db.commit()
+
+                    # Copy data from the old table to the new table
+                    old_columns = [col[1] for col in columns]
+                    new_columns = [new_column_name if col.lower() == 'id' else col for col in old_columns]
+                    cursor.execute(f"""
+                        INSERT INTO "{temp_table}" ({', '.join(new_columns)})
+                        SELECT {', '.join(old_columns)}
+                        FROM "{table_name}";
+                    """)
+                    db.commit()
+
+                    # Replace the old table with the new table
+                    cursor.execute(f'DROP TABLE "{table_name}";')
+                    cursor.execute(f'ALTER TABLE "{temp_table}" RENAME TO "{table_name}";')
+                    db.commit()
+
+                    logging.info(f"Set primary key for '{new_column_name}' in table '{table_name}'")
+
+                except sqlite3.OperationalError as e:
+                    logging.warning(f"Could not set primary key in {table_name}: {e}")
+                    cursor.execute(f'DROP TABLE IF EXISTS "{temp_table}";')
+                    db.commit()
     db.commit()
-
-def table_has_constraints(db, table_name: str, new_column_name: str, 
-                         match_table: str, match_table_id_column: str) -> bool:
-    cursor = db.cursor
-    cursor.execute(f'PRAGMA table_info("{table_name}");')
-    columns = cursor.fetchall()
-    if new_column_name not in {col[1] for col in columns}:
-        return False
-
-    cursor.execute(f'PRAGMA foreign_key_list("{table_name}");')
-    foreign_keys = cursor.fetchall()
-    return any(
-        fk[3] == new_column_name and 
-        fk[2] == match_table and 
-        fk[4] == match_table_id_column 
-        for fk in foreign_keys
-    )
-
-def execute_with_retry(db, query: str, params=(), max_retries=5, delay=1):
-    cursor = db.cursor
-    for attempt in range(max_retries):
-        try:
-            cursor.execute(query, params)
-            return
-        except sqlite3.OperationalError as e:
-            if "database is locked" in str(e) and attempt < max_retries - 1:
-                time.sleep(delay)
-                continue
-            raise
 
 def rename_id_columns_and_create_relations(db_path: str, matching_info):
     db = DatabaseConnection(db_path)
     tracker = RenameTracker()
-    
+
     try:
-        # First rename all id columns
+        # --- Step 1: Rename id columns & add primary keys where needed ---
         rename_id_columns(db, tracker)
-        
-        # Then create relations
-        for table_name, column_name, match_table, _ in matching_info:
-            cursor = db.cursor
-            
-            # Skip if table is trying to reference itself
+
+        # --- Step 2: Group all detected relations (excluding self-references) by source table ---
+        relations_by_table = {}
+        for match in matching_info:
+            if len(match) < 3:
+                continue  # Skip invalid entries
+            table_name, column_name, match_table = match[:3]  # Unpack the first three elements
             if table_name == match_table:
                 continue
-            
-            # Verify match table exists and has id column
-            cursor.execute(f'PRAGMA table_info("{match_table}");')
-            match_columns = cursor.fetchall()
-            match_table_id = f"{match_table}_id"
-            
-            if match_table_id not in {col[1] for col in match_columns}:
-                continue
-                
-            # Skip if constraints already exist
-            if table_has_constraints(db, table_name, match_table_id, 
-                                  match_table, match_table_id):
-                continue
-                
-            # Create new table with foreign key and primary key
-            cursor.execute(f'PRAGMA table_info("{table_name}");')
-            current_columns = cursor.fetchall()
-            
-            # Find or create primary key column
-            table_id_column = f"{table_name}_id"
-            has_primary_key = any(col[5] == 1 for col in current_columns)  # Check if any column is primary key
-            
-            column_defs = []
-            if not has_primary_key:
-                # Add primary key as first column if none exists
-                column_defs.append(f'"{table_id_column}" INTEGER PRIMARY KEY AUTOINCREMENT')
-            
-            # Add all existing columns except the one being replaced
-            column_defs.extend([
-                f'"{col[1]}" {col[2]} {"PRIMARY KEY" if col[5] == 1 else ""}' 
-                for col in current_columns 
-                if col[1] != column_name
-            ])
-            
-            # Add the foreign key column
-            column_defs.append(f'"{match_table_id}" INTEGER REFERENCES "{match_table}"("{match_table_id}")')
-            
-            new_table_name = f"{table_name}_new"
-            create_sql = f"""
-                CREATE TABLE "{new_table_name}" (
-                    {', '.join(column_defs)}
-                );
-            """
-            
+            relations_by_table.setdefault(table_name, []).append((column_name, match_table))
+
+        # --- Step 3: For each source table, rebuild the table with all its foreign key columns ---
+        for table_name, relations in relations_by_table.items():
             try:
-                # Create new table
+                cursor = db.cursor
+                cursor.execute(f'PRAGMA table_info("{table_name}");')
+                current_columns = cursor.fetchall()
+                # Identify columns to keep (skip each column that is to be replaced by a foreign key)
+                skip_columns = {col_name for col_name, _ in relations}
+                kept_columns = [col for col in current_columns if col[1] not in skip_columns]
+
+                # Build new table definition
+                new_col_defs = []
+                table_pk = f"{table_name}_id"
+                has_pk = any(col[5] == 1 for col in current_columns)
+                # Ensure the primary key column is present.
+                if not any(col[1].lower() == table_pk.lower() for col in kept_columns):
+                    new_col_defs.append(f'"{table_pk}" INTEGER PRIMARY KEY AUTOINCREMENT')
+                else:
+                    for col in kept_columns:
+                        if col[1].lower() == table_pk.lower():
+                            new_col_defs.append(f'"{col[1]}" {col[2]} PRIMARY KEY AUTOINCREMENT')
+                        else:
+                            new_col_defs.append(f'"{col[1]}" {col[2]}')
+
+                # For each relation, add a foreign key column.
+                # The new FK column is named the same as the id of the reference table.
+                fk_columns = []
+                for column, match_table in relations:
+                    fk_col = f"{match_table}_id"
+                    new_col_defs.append(f'"{fk_col}" INTEGER REFERENCES "{match_table}"("{fk_col}")')
+                    fk_columns.append((column, fk_col, match_table))
+
+                new_table = f"{table_name}_new"
+                create_sql = f'CREATE TABLE "{new_table}" ({", ".join(new_col_defs)});'
                 execute_with_retry(db, create_sql)
-                
-                # Copy data
-                source_cols = [
-                    f'"{col[1]}"' 
-                    for col in current_columns 
-                    if col[1] != column_name
-                ]
-                
-                # Include new primary key column in INSERT if it was added
-                if not has_primary_key:
-                    source_cols.insert(0, f'(SELECT COALESCE(MAX("{table_id_column}"), 0) + ROW_NUMBER() OVER () FROM "{table_name}")')
-                
-                insert_sql = f"""
-                    INSERT INTO "{new_table_name}" ({', '.join(source_cols)}, "{match_table_id}")
-                    SELECT {', '.join(source_cols)},
-                        (SELECT "{match_table_id}" 
-                         FROM "{match_table}" 
-                         WHERE "{match_table}"."{match_table_id}" = "{table_name}"."{column_name}")
-                    FROM "{table_name}";
-                """
+
+                # --- Step 4: Migrate data from the old table into the new table ---
+                # Prepare the list of columns to copy directly.
+                kept_names = [col[1] for col in kept_columns]
+                # Build the INSERT column list:
+                insert_cols = kept_names + [fk for (_, fk, _) in fk_columns]
+                insert_cols_sql = ', '.join(f'"{col}"' for col in insert_cols)
+
+                # Build the SELECT for the kept columns.
+                # Alias the old table as "t" so that subqueries can reference its columns.
+                select_parts = [f't."{col}"' for col in kept_names]
+                # For each relation, use a correlating subquery to retrieve the matching foreign key value.
+                for column, fk_col, match_table in fk_columns:
+                    match_table_fk = f"{match_table}_id"
+                    subquery = f"""(
+                        SELECT mt."{match_table_fk}"
+                        FROM "{match_table}" AS mt
+                        WHERE CAST(mt."{match_table_fk}" AS TEXT) = CAST(t."{column}" AS TEXT)
+                        LIMIT 1
+                    )"""
+                    select_parts.append(subquery)
+
+                select_sql = ', '.join(select_parts)
+                insert_sql = f'INSERT INTO "{new_table}" ({insert_cols_sql}) SELECT {select_sql} FROM "{table_name}" AS t;'
+                logging.info(f"Executing SQL: {insert_sql}")
                 execute_with_retry(db, insert_sql)
-                
-                # Replace old table
+
+                # Replace the old table with the new one.
                 execute_with_retry(db, f'DROP TABLE "{table_name}";')
-                execute_with_retry(db, f'ALTER TABLE "{new_table_name}" RENAME TO "{table_name}";')
-                
-            except sqlite3.Error as e:
-                logging.error(f"Error creating relation for {table_name}: {e}")
-                # Clean up on failure
-                execute_with_retry(db, f'DROP TABLE IF EXISTS "{new_table_name}";')
-                continue
-                
-        db.commit()
-        
+                execute_with_retry(db, f'ALTER TABLE "{new_table}" RENAME TO "{table_name}";')
+
+                db.commit()
+            except Exception as e:
+                logging.error(f"Error processing table {table_name}: {e}")
+                db.rollback()
+                continue  # Continue with the next table
+
     except Exception as e:
         db.rollback()
         raise e
+    finally:
+        db.close()

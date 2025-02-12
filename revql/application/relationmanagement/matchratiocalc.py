@@ -2,6 +2,14 @@ from ..utils.db_connection import DatabaseConnection
 from ..utils.db_utils import delete_empty_tables, delete_empty_columns
 import sqlite3
 
+def get_overlap_percentage(set1, set2):
+    """Calculate the percentage of overlap between two sets."""
+    if not set1 or not set2:
+        return 0.0
+    intersection = len(set1 & set2)
+    smaller_set = min(len(set1), len(set2))
+    return (intersection / smaller_set) * 100
+
 def prefix_similarity(str1, str2):
     """Calculate similarity ratio between two strings."""
     str1 = str1.lower()
@@ -51,6 +59,7 @@ def find_matching_table_column_names(db_path):
 
     table_names = [table[0] for table in tables]
     matching_info = []
+    data_matching_info = []
 
     for table in tables:
         table_name = table[0]
@@ -69,20 +78,22 @@ def find_matching_table_column_names(db_path):
                 if table_name == t_name:
                     continue
 
-                # Skip if column name is just the suffix _id of any table
-                if any(column_name == f"{other_table}_id" for other_table in table_names):
-                    continue
-
-                # Special case for Phase relationships
-                if (column_name.lower().startswith('phase') and t_name == 'Phases') or \
-                   (column_name == "PhaseCreated" and t_name == "Phases"):
-                    match_ratio = 1.0
+                # Direct match for column_name ending with _id
+                if column_name.lower().endswith('_id'):
+                    base_name = column_name.lower()[:-3]  # Remove _id suffix
+                    if base_name == t_name.lower():
+                        match_ratio = 1.0
+                    else:
+                        # Calculate similarity for potential partial matches
+                        match_ratio = prefix_similarity(base_name, t_name.lower())
                 else:
-                    # Calculate similarity
-                    match_ratio = prefix_similarity(column_name.lower(), t_name.lower())
-
-                if match_ratio > 0.5:
-                    print(f"Checking {table_name}.{column_name} against {t_name}: ratio = {match_ratio}")
+                    # Special case for Phase relationships
+                    if (column_name.lower().startswith('phase') and t_name == 'Phases') or \
+                       (column_name == "PhaseCreated" and t_name == "Phases"):
+                        match_ratio = 1.0
+                    else:
+                        # Calculate similarity
+                        match_ratio = prefix_similarity(column_name.lower(), t_name.lower())
 
                 if match_ratio > 0.5:
                     try:
@@ -106,14 +117,19 @@ def find_matching_table_column_names(db_path):
                                 cursor.execute(f"SELECT DISTINCT \"{id_column}\" FROM \"{t_name}\" WHERE \"{id_column}\" IS NOT NULL")
                                 id_data = set(str(item[0]) for item in cursor.fetchall() if item[0] is not None)
 
-                                if column_data & id_data:  # If there's any overlap
+                                overlap_percentage = get_overlap_percentage(column_data, id_data)
+                                
+                                if overlap_percentage >= 95:  # Data match above 95%
+                                    data_matching_info.append((table_name, column_name, t_name, match_ratio, overlap_percentage))
+                                    print(f"High data match found: {table_name}.{column_name} -> {t_name}.{id_column} (Overlap: {overlap_percentage:.2f}%)")
+                                elif column_data & id_data:  # If there's any overlap
                                     matching_info.append((table_name, column_name, t_name, match_ratio))
-                                    print(f"Match found: {table_name}.{column_name} -> {t_name}.{id_column}")
-                                    break
+                                    print(f"Name match found: {table_name}.{column_name} -> {t_name}.{id_column}")
+                                break
 
                     except sqlite3.Error as e:
                         print(f"Error checking {table_name}.{column_name}: {e}")
                         continue
 
     db.commit()
-    return matching_info
+    return matching_info, data_matching_info

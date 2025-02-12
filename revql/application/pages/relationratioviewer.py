@@ -1,4 +1,5 @@
 import tkinter as tk
+import sqlite3
 from tkinter import ttk, messagebox
 from ..utils.tablesorter import TableSorter
 from ..relationmanagement.idrefactor import rename_id_columns_and_create_relations
@@ -11,7 +12,7 @@ class RelationRatioViewer:
         self.top = tk.Toplevel(parent)
         self.top.title("Manage Relationships")
         self.db_path = db_path
-        self.matching_info = matching_info
+        self.name_matches, self.data_matches = matching_info  # Unpack the tuple of matches
 
         self.frame = ttk.Frame(self.top, padding="10")
         self.frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
@@ -22,76 +23,67 @@ class RelationRatioViewer:
         self.frame.rowconfigure(0, weight=1)
 
         # Create treeview
-        self.tree = ttk.Treeview(self.frame, columns=("Table", "Column", "Matches Table", "Match Ratio"), show="headings")
-        self.tree.heading("Table", text="Table", command=lambda: self.sorter.sort_by_column("Table", False, 'alphabetical'))
-        self.tree.heading("Column", text="Column", command=lambda: self.sorter.sort_by_column("Column", False, 'alphabetical'))
-        self.tree.heading("Matches Table", text="Matches Table", command=lambda: self.sorter.sort_by_column("Matches Table", False, 'alphabetical'))
-        self.tree.heading("Match Ratio", text="Match Ratio", command=lambda: self.sorter.sort_by_column("Match Ratio", False, 'numeric'))
+        columns = ["Table", "Column", "Matches Table", "Match Ratio", "Data Overlap %"]
+        self.tree = ttk.Treeview(self.frame, columns=columns, show="headings")
+        
+        # Configure column headings
+        for col in columns:
+            self.tree.heading(col, text=col, 
+                            command=lambda c=col: self._sort_treeview(self.tree, c, 
+                                data_type='numeric' if c in ["Match Ratio", "Data Overlap %"] else 'alphabetical'))
+            if col in ["Match Ratio", "Data Overlap %"]:
+                self.tree.column(col, width=100, anchor="center")
+            else:
+                self.tree.column(col, width=150)
+
         self.tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
 
         # Add scrollbar
-        self.scrollbar = ttk.Scrollbar(self.frame, orient=tk.VERTICAL, command=self.tree.yview)
-        self.tree.configure(yscroll=self.scrollbar.set)
-        self.scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        scrollbar = ttk.Scrollbar(self.frame, orient=tk.VERTICAL, command=self.tree.yview)
+        self.tree.configure(yscroll=scrollbar.set)
+        scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
 
-        # Populate data
-        for table, column, match_table, ratio in matching_info:
-            if ratio > 0.5:
-                self.tree.insert("", "end", values=(table, column, match_table, f"{ratio:.2f}"))
+        # Populate matches - only show data matches with high overlap
+        if self.data_matches:  # Check if data_matches exists and is not empty
+            for table, column, match_table, ratio, overlap in self.data_matches:
+                if overlap >= 95:  # Only show matches with 95% or higher overlap
+                    self.tree.insert("", "end", 
+                        values=(table, column, match_table, f"{ratio:.2f}", f"{overlap:.2f}"))
 
-        # Initialize sorter
-        self.sorter = TableSorter(self.tree)
-        self.sorter.sort_by_column("Match Ratio", True, 'numeric')
+        # Sort tree by data overlap initially
+        self._sort_treeview(self.tree, "Data Overlap %", "numeric")
 
         # Add buttons
         self.create_relations_button = ttk.Button(self.frame, text="Create Relations", command=self.create_relations)
-        self.create_relations_button.grid(row=1, column=0, sticky=tk.W)
+        self.create_relations_button.grid(row=1, column=0, sticky=tk.W, pady=5)
 
         self.close_button = ttk.Button(self.frame, text="Close", command=self.top.destroy)
-        self.close_button.grid(row=1, column=1, sticky=tk.E)
+        self.close_button.grid(row=1, column=1, sticky=tk.E, pady=5)
+
+    def _sort_treeview(self, tree, column, data_type='alphabetical'):
+        sorter = TableSorter(tree)
+        sorter.sort_by_column(column, False, data_type)
 
     def create_relations(self):
+        """Create primary keys (if needed) and establish foreign key relationships between tables."""
         try:
-            # Ask for confirmation
-            if not messagebox.askyesno("Confirm Changes", 
-                "This will delete empty tables and columns, then create relations. Continue?"):
+            if not self.data_matches:
+                messagebox.showinfo("No Matches", "No valid matches found to create relations.")
                 return
-    
-            db = DatabaseConnection(self.db_path)
-            
-            try:
-                # Delete empty tables
-                empty_tables = delete_empty_tables(self.db_path)
-                if empty_tables:
-                    messagebox.showinfo("Deleted Empty Tables", 
-                        f"Deleted the following empty tables:\n\n{', '.join(empty_tables)}")
-    
-                # Delete empty columns
-                cursor = db.cursor
-                cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-                tables = cursor.fetchall()
-                
-                for table in tables:
-                    table_name = table[0]
-                    
-                    # Skip sqlite_sequence table
-                    if table_name == 'sqlite_sequence':
-                        continue
-                    
-                    delete_empty_columns(self.db_path, table_name)
-    
-                # Create relations
-                rename_id_columns_and_create_relations(self.db_path, self.matching_info)
-                
-                # Ensure every table has ProjectInformation_id column
-                ensure_project_information_id(self.db_path)
-                
-                messagebox.showinfo("Success", 
-                    "Operations completed successfully:\n- Empty tables deleted\n- Empty columns deleted\n- Relations created\n- ProjectInformation_id added")
-                
-            finally:
-                db.close()
-                
+        
+            if not messagebox.askyesno("Confirm Changes",
+                                       "This will modify tables and create relationships. Continue?"):
+                return
+        
+            rename_id_columns_and_create_relations(self.db_path, self.data_matches)
+        
+            messagebox.showinfo("Success",
+                "Successfully created relations for all detected tables\n"
+                "- Primary keys created\n"
+                "- All detected foreign key relationships established\n"
+                "- ProjectInformation_id added")
+        
         except Exception as e:
+            print(f"Critical error: {str(e)}")
             messagebox.showerror("Error", f"An error occurred: {str(e)}")
             raise
