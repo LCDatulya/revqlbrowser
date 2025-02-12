@@ -227,23 +227,32 @@ def rename_id_columns_and_create_relations(db_path: str, matching_info):
 
             if 'ProjectInformation_id' not in column_names:
                 cursor.execute(f'ALTER TABLE "{table_name}" ADD COLUMN "ProjectInformation_id" INTEGER')
+
+            # Create new table with foreign key constraint
+            new_columns = [f'"{col[1]}" {col[2]}' for col in columns]
+            new_columns.append('"ProjectInformation_id" INTEGER')
+            cursor.execute(f'''
+                CREATE TABLE "{table_name}_new" (
+                    {", ".join(new_columns)},
+                    FOREIGN KEY("ProjectInformation_id") REFERENCES "ProjectInformation"("ProjectInformation_id")
+                )
+            ''')
+
+            # Insert data into new table
+            old_columns = [f'"{col}"' for col in column_names]
+            try:
                 cursor.execute(f'''
-                    CREATE TABLE "{table_name}_temp" AS 
-                    SELECT * FROM "{table_name}";
+                    INSERT INTO "{table_name}_new" ({", ".join(old_columns)}, "ProjectInformation_id")
+                    SELECT {", ".join(old_columns)}, "ProjectInformation_id"
+                    FROM "{table_name}"
                 ''')
-                cursor.execute(f'''
-                    DROP TABLE "{table_name}";
-                ''')
-                cursor.execute(f'''
-                    CREATE TABLE "{table_name}" AS 
-                    SELECT * FROM "{table_name}_temp";
-                ''')
-                cursor.execute(f'''
-                    ALTER TABLE "{table_name}" ADD FOREIGN KEY("ProjectInformation_id") REFERENCES "ProjectInformation"("ProjectInformation_id");
-                ''')
-                cursor.execute(f'''
-                    DROP TABLE "{table_name}_temp";
-                ''')
+            except sqlite3.OperationalError as e:
+                logging.warning(f"Skipping duplicate column in {table_name}: {e}")
+                continue
+
+            # Drop old table and rename new table
+            cursor.execute(f'DROP TABLE "{table_name}"')
+            cursor.execute(f'ALTER TABLE "{table_name}_new" RENAME TO "{table_name}"')
 
         db.commit()
 
