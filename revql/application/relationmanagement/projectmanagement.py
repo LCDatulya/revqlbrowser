@@ -1,6 +1,18 @@
 from ..utils.db_connection import DatabaseConnection
 from ..utils.db_utils import delete_empty_tables, delete_empty_columns
 
+from ..utils.db_connection import DatabaseConnection
+from ..utils.db_utils import delete_empty_tables, delete_empty_columns
+
+from ..utils.db_connection import DatabaseConnection
+from ..utils.db_utils import delete_empty_tables, delete_empty_columns
+
+from ..utils.db_connection import DatabaseConnection
+from ..utils.db_utils import delete_empty_tables, delete_empty_columns
+
+from ..utils.db_connection import DatabaseConnection
+from ..utils.db_utils import delete_empty_tables, delete_empty_columns
+
 def ensure_project_information_id(db_path):
     db = DatabaseConnection(db_path)
     cursor = db.cursor
@@ -28,12 +40,18 @@ def ensure_project_information_id(db_path):
     project_info_columns = cursor.fetchall()
     project_info_primary_key = None
     for column in project_info_columns:
-        if column[5] == 1:  # Primary key column
+        if column[1].lower() == 'projectinformation_id':
             project_info_primary_key = column[1]
             break
 
     if not project_info_primary_key:
-        raise Exception("Primary key column not found in ProjectInformation table.")
+        raise Exception("Primary key column 'ProjectInformation_id' not found in ProjectInformation table.")
+
+    # Ensure ProjectInformation_id is the primary key
+    cursor.execute(f"PRAGMA table_info('ProjectInformation');")
+    columns = cursor.fetchall()
+    if not any(col[1].lower() == 'projectinformation_id' and col[5] == 1 for col in columns):
+        raise Exception("ProjectInformation_id is not set as the primary key in ProjectInformation table.")
 
     # Add ProjectInformation_id column to all tables
     for table in tables:
@@ -51,11 +69,11 @@ def ensure_project_information_id(db_path):
         # Update ProjectInformation_id column with the most recent ProjectInformation_id
         cursor.execute(f'UPDATE "{table_name}" SET "ProjectInformation_id" = (SELECT "{project_info_primary_key}" FROM "ProjectInformation" ORDER BY "{project_info_primary_key}" DESC LIMIT 1) WHERE "ProjectInformation_id" IS NULL')
 
-        # Create new table with foreign key constraint if it doesn't exist
+        # Create new table with foreign key constraint
         new_columns = [f'"{col[1]}" {col[2]}' for col in columns]
         new_columns.append('"ProjectInformation_id" INTEGER')
         cursor.execute(f'''
-            CREATE TABLE IF NOT EXISTS "{table_name}_new" (
+            CREATE TABLE "{table_name}_new" (
                 {", ".join(new_columns)},
                 FOREIGN KEY("ProjectInformation_id") REFERENCES "ProjectInformation"("{project_info_primary_key}")
             )
@@ -65,7 +83,7 @@ def ensure_project_information_id(db_path):
         old_columns = [f'"{col}"' for col in column_names]
         cursor.execute(f'''
             INSERT INTO "{table_name}_new" ({", ".join(old_columns)}, "ProjectInformation_id")
-            SELECT {", ".join(old_columns)}, (SELECT "{project_info_primary_key}" FROM "ProjectInformation" ORDER BY "{project_info_primary_key}" DESC LIMIT 1)
+            SELECT {", ".join(old_columns)}, "ProjectInformation_id"
             FROM "{table_name}"
         ''')
 

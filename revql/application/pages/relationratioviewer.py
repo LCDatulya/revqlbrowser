@@ -6,6 +6,8 @@ from ..relationmanagement.idrefactor import rename_id_columns_and_create_relatio
 from ..utils.db_utils import delete_empty_columns, delete_empty_tables
 from ..utils.db_connection import DatabaseConnection
 from ..relationmanagement.projectmanagement import ensure_project_information_id
+from .projectselectionpopup import ProjectSelectionPopup
+import logging
 
 class RelationRatioViewer:
     def __init__(self, parent, matching_info, db_path):
@@ -77,13 +79,30 @@ class RelationRatioViewer:
         
             rename_id_columns_and_create_relations(self.db_path, self.data_matches)
         
-            messagebox.showinfo("Success",
-                "Successfully created relations for all detected tables\n"
-                "- Primary keys created\n"
-                "- All detected foreign key relationships established\n"
-                "- ProjectInformation_id added")
+            ProjectSelectionPopup(self.top, self.db_path, self.update_project_information_id)
         
         except Exception as e:
             print(f"Critical error: {str(e)}")
             messagebox.showerror("Error", f"An error occurred: {str(e)}")
             raise
+
+    def update_project_information_id(self, project_id):
+        """Update ProjectInformation_id for new data."""
+        db = DatabaseConnection(self.db_path)
+        cursor = db.cursor
+        
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        tables = cursor.fetchall()
+        for table in tables:
+            table_name = table[0]
+            if table_name in ['ProjectInformation', 'sqlite_sequence']:
+                continue
+                
+            try:
+                cursor.execute(f'UPDATE "{table_name}" SET "ProjectInformation_id" = ? WHERE "ProjectInformation_id" IS NULL', (project_id,))
+            except sqlite3.OperationalError as e:
+                logging.warning(f"Could not update ProjectInformation_id in {table_name}: {e}")
+        
+        db.commit()
+        db.close()
+        messagebox.showinfo("Success", "ProjectInformation_id updated for new data.")

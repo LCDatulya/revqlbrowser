@@ -105,7 +105,25 @@ def rename_id_columns_and_create_relations(db_path: str, matching_info):
         # --- Step 1: Rename id columns & add primary keys where needed ---
         rename_id_columns(db, tracker)
 
-        # --- Step 2: Group all detected relations (excluding self-references) by source table ---
+        # --- Step 2: Add ProjectInformation_id column to all tables ---
+        cursor = db.cursor
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        tables = cursor.fetchall()
+        for table in tables:
+            table_name = table[0]
+            if table_name in ['ProjectInformation', 'sqlite_sequence']:
+                continue
+
+            cursor.execute(f'PRAGMA table_info("{table_name}");')
+            columns = cursor.fetchall()
+            column_names = [col[1] for col in columns]
+
+            if 'ProjectInformation_id' not in column_names:
+                cursor.execute(f'ALTER TABLE "{table_name}" ADD COLUMN "ProjectInformation_id" INTEGER')
+
+        db.commit()
+
+        # --- Step 3: Group all detected relations (excluding self-references) by source table ---
         relations_by_table = {}
         for match in matching_info:
             if len(match) < 3:
@@ -115,7 +133,7 @@ def rename_id_columns_and_create_relations(db_path: str, matching_info):
                 continue
             relations_by_table.setdefault(table_name, []).append((column_name, match_table))
 
-        # --- Step 3: For each source table, rebuild the table with all its foreign key columns ---
+        # --- Step 4: For each source table, rebuild the table with all its foreign key columns ---
         for table_name, relations in relations_by_table.items():
             try:
                 cursor = db.cursor
@@ -139,6 +157,10 @@ def rename_id_columns_and_create_relations(db_path: str, matching_info):
                         else:
                             new_col_defs.append(f'"{col[1]}" {col[2]}')
 
+                # Add ProjectInformation_id column
+                if 'projectinformation_id' not in {col[1].lower() for col in current_columns}:
+                    new_col_defs.append('"ProjectInformation_id" INTEGER')
+
                 # For each relation, add a foreign key column.
                 # The new FK column is named the same as the id of the reference table.
                 fk_columns = []
@@ -147,15 +169,18 @@ def rename_id_columns_and_create_relations(db_path: str, matching_info):
                     new_col_defs.append(f'"{fk_col}" INTEGER REFERENCES "{match_table}"("{fk_col}")')
                     fk_columns.append((column, fk_col, match_table))
 
+                # Add foreign key constraint for ProjectInformation_id
+                new_col_defs.append('FOREIGN KEY("ProjectInformation_id") REFERENCES "ProjectInformation"("ProjectInformation_id")')
+
                 new_table = f"{table_name}_new"
                 create_sql = f'CREATE TABLE "{new_table}" ({", ".join(new_col_defs)});'
                 execute_with_retry(db, create_sql)
 
-                # --- Step 4: Migrate data from the old table into the new table ---
+                # --- Step 5: Migrate data from the old table into the new table ---
                 # Prepare the list of columns to copy directly.
                 kept_names = [col[1] for col in kept_columns]
                 # Build the INSERT column list:
-                insert_cols = kept_names + [fk for (_, fk, _) in fk_columns]
+                insert_cols = kept_names + [fk for (_, fk, _) in fk_columns] + ['ProjectInformation_id']
                 insert_cols_sql = ', '.join(f'"{col}"' for col in insert_cols)
 
                 # Build the SELECT for the kept columns.
@@ -171,6 +196,9 @@ def rename_id_columns_and_create_relations(db_path: str, matching_info):
                         LIMIT 1
                     )"""
                     select_parts.append(subquery)
+
+                # Add ProjectInformation_id to the SELECT
+                select_parts.append('NULL AS "ProjectInformation_id"')
 
                 select_sql = ', '.join(select_parts)
                 insert_sql = f'INSERT INTO "{new_table}" ({insert_cols_sql}) SELECT {select_sql} FROM "{table_name}" AS t;'
