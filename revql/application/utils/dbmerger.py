@@ -176,6 +176,9 @@ class DatabaseMerger:
             self._setup_database(source_db)
             self._setup_database(target_db)
 
+            # Ensure ProjectInformation table exists and is correctly configured
+            self._ensure_project_information_table(target_db)
+
             # Process tables
             tables = self._get_source_tables(source_db)
             for table_name, columns in tables.items():
@@ -234,14 +237,45 @@ class DatabaseMerger:
             (table_name,)
         )
         return db.cursor.fetchone() is not None
-    
-    def _copy_table(self, source_db: DatabaseConnection, target_db: DatabaseConnection, 
-                    table_name: str, columns: List[tuple]) -> None:
-        """Create new table and copy all data"""
+
+    def _ensure_project_information_table(self, db: DatabaseConnection) -> None:
+        """Ensure ProjectInformation table exists and is correctly configured"""
+        try:
+            print("Ensuring ProjectInformation table exists")  # Debugging
+            # Check if ProjectInformation table exists
+            db.cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='ProjectInformation'")
+            if not db.cursor.fetchone():
+                # Create ProjectInformation table
+                db.cursor.execute('''
+                    CREATE TABLE "ProjectInformation" (
+                        "ProjectInformation_id" INTEGER PRIMARY KEY AUTOINCREMENT,
+                        "ProjectName" TEXT
+                    )
+                ''')
+                logging.info("Created ProjectInformation table")
+            else:
+                # Check if ProjectInformation_id column exists
+                db.cursor.execute("PRAGMA table_info('ProjectInformation')")
+                columns = db.cursor.fetchall()
+                if not any(col[1].lower() == 'projectinformation_id' for col in columns):
+                    # Add ProjectInformation_id column
+                    db.cursor.execute('ALTER TABLE "ProjectInformation" ADD COLUMN "ProjectInformation_id" INTEGER PRIMARY KEY AUTOINCREMENT')
+                    logging.info("Added ProjectInformation_id column to ProjectInformation table")
+
+            db.commit()
+            print("ProjectInformation table check complete")  # Debugging
+        except Exception as e:
+            db.rollback()
+            logging.error(f"Error ensuring ProjectInformation table: {e}")
+            raise
+
+    def _copy_table(self, source_db: DatabaseConnection, target_db: DatabaseConnection, table_name: str, columns: List[tuple]) -> None:
+        """Create new table and copy all data, preserving ProjectInformation_id"""
         temp_name = f"{table_name}_temp_{int(time.time())}"
         self._temp_tables.add(temp_name)
         
         try:
+            print(f"Copying table {table_name}")  # Debugging
             # Generate column definitions
             col_defs = []
             col_names = []
@@ -253,106 +287,95 @@ class DatabaseMerger:
                     col_defs.append(f'"{col_name}" {col_type} PRIMARY KEY AUTOINCREMENT')
                 else:
                     col_defs.append(f'"{col_name}" {col_type}')
-            
+        
+            # Add ProjectInformation_id column
+            col_defs.append('"ProjectInformation_id" INTEGER')
+            col_names.append('"ProjectInformation_id"')
+        
             # Create table
-            create_sql = f'CREATE TABLE "{table_name}" ({", ".join(col_defs)})'
+            create_sql = f'CREATE TABLE "{temp_name}" ({", ".join(col_defs)})'
+            print(f"Creating table with SQL: {create_sql}")  # Debugging
+            logging.debug(f"Creating table with SQL: {create_sql}")
             self._execute_with_retry(target_db, create_sql)
-            
-            # Copy data
-            self._execute_with_retry(
-                source_db,
-                f'SELECT * FROM "{table_name}"'
-            )
-            rows = source_db.cursor.fetchall()
-            
-            if rows:
-                columns_str = ", ".join(col_names)
-                placeholders = ",".join(["?" for _ in range(len(col_names))])
-                insert_sql = f'INSERT INTO "{table_name}" ({columns_str}) VALUES ({placeholders})'
-                
-                for row in rows:
-                    try:
-                        self._execute_with_retry(target_db, insert_sql, row)
-                    except sqlite3.IntegrityError as e:
-                        logging.warning(f"Skipping duplicate record in {table_name}: {e}")
-            
+        
+            # Copy data from source, preserving ProjectInformation_id
+            source_col_names = [col[1] for col in columns]
+            select_cols = ", ".join(f'"{col}"' for col in source_col_names)
+            insert_cols = ", ".join(f'"{col}"' for col in col_names)  # Include ProjectInformation_id
+        
+            insert_sql = f'''
+                INSERT INTO "{temp_name}" ({insert_cols})
+                SELECT {select_cols}, (SELECT "ProjectInformation_id" FROM "ProjectInformation" ORDER BY "ProjectInformation_id" DESC LIMIT 1)
+                FROM "{table_name}"
+            '''
+            print(f"Copying data with SQL: {insert_sql}")  # Debugging
+            logging.debug(f"Copying data with SQL: {insert_sql}")
+            self._execute_with_retry(source_db, insert_sql)
+        
+            # Replace original table
+            self._execute_with_retry(target_db, f'DROP TABLE "{table_name}"')
+            self._execute_with_retry(target_db, f'ALTER TABLE "{temp_name}" RENAME TO "{table_name}"')
+        
             target_db.commit()
-            
+            print(f"Successfully copied table {table_name}")  # Debugging
+        
         except Exception as e:
             target_db.rollback()
-            logging.error(f"Error copying table {table_name} with columns {columns}: {e}")
+            logging.error(f"Error copying table {table_name}: {e}")
             raise
         finally:
             if temp_name in self._temp_tables:
                 self._temp_tables.remove(temp_name)
 
-    def _merge_existing_table(self, source_db: DatabaseConnection, target_db: DatabaseConnection, 
-                           table_name: str, source_columns: List[tuple]) -> None:
-        """Merge data into existing table with duplicate column handling"""
+    def _merge_existing_table(self, source_db: DatabaseConnection, target_db: DatabaseConnection, table_name: str, source_columns: List[tuple]) -> None:
+        """Merge data into existing table, preserving ProjectInformation_id"""
         try:
-            # Get target table schema and map column names to their definitions
+            print(f"Merging existing table {table_name}")  # Debugging
+            # Get target table schema
             target_columns = self._get_table_schema(target_db, table_name)
-            target_col_names = {col[1].lower() for col in target_columns}
-        
-            # For each source column, add it to target if missing (skip if exists)
+            target_col_names = {col[1].lower(): col[1] for col in target_columns}
+
+            # Add missing columns from source
             for col in source_columns:
                 col_name = col[1]
                 col_lower = col_name.lower()
-                if col_lower in target_col_names:
-                    continue  # Column already exists, skip
-                try:
-                    alter_sql = f'ALTER TABLE "{table_name}" ADD COLUMN "{col_name}" {col[2]}'
-                    self._execute_with_retry(target_db, alter_sql)
-                except sqlite3.OperationalError as e:
-                    if "duplicate column name" not in str(e):
-                        logging.warning(f"Error adding column {col_name} to {table_name}: {e}")
-        
-            # Ensure ProjectInformation_id exists; add it only if missing
+                if col_lower not in target_col_names:
+                    try:
+                        alter_sql = f'ALTER TABLE "{table_name}" ADD COLUMN "{col_name}" {col[2]}'
+                        print(f"Adding column with SQL: {alter_sql}")  # Debugging
+                        self._execute_with_retry(target_db, alter_sql)
+                        logging.info(f"Added column {col_name} to {table_name}")
+                    except sqlite3.OperationalError as e:
+                        logging.warning(f"Could not add column {col_name} to {table_name}: {e}")
+
+            # Add ProjectInformation_id if missing
             if 'projectinformation_id' not in target_col_names:
                 try:
                     alter_sql = f'ALTER TABLE "{table_name}" ADD COLUMN "ProjectInformation_id" INTEGER'
+                    print(f"Adding ProjectInformation_id with SQL: {alter_sql}")  # Debugging
                     self._execute_with_retry(target_db, alter_sql)
+                    logging.info(f"Added ProjectInformation_id to {table_name}")
                 except sqlite3.OperationalError as e:
-                    if "duplicate column name" not in str(e):
-                        logging.warning(f"Error adding ProjectInformation_id to {table_name}: {e}")
-        
-            # Retrieve existing rows from target to avoid duplicates
-            self._execute_with_retry(
-                target_db,
-                f'SELECT "{table_name}_id" FROM "{table_name}"'
-            )
-            existing_ids = {row[0] for row in target_db.cursor.fetchall()}
-        
-            # Fetch all rows from source table
-            self._execute_with_retry(
-                source_db,
-                f'SELECT * FROM "{table_name}"'
-            )
-            rows = source_db.cursor.fetchall()
-            if not rows:
-                return
-        
-            # Build column list for insertion from target schema
-            # This list includes columns that are common to source and target.
-            new_target_schema = self._get_table_schema(target_db, table_name)
-            common_columns = [col[1] for col in new_target_schema if col[1].lower() in {sc[1].lower() for sc in source_columns}]
-            columns_str = ", ".join(f'"{col}"' for col in common_columns)
-            placeholders = ",".join("?" for _ in common_columns)
-            insert_sql = f'INSERT INTO "{table_name}" ({columns_str}) VALUES ({placeholders})'
-        
-            # Insert rows that don't already exist in target
-            for row in rows:
-                # Assuming the first column is the primary key; adjust index as needed
-                if row[0] in existing_ids:
-                    continue
-                try:
-                    self._execute_with_retry(target_db, insert_sql, row)
-                except sqlite3.IntegrityError as e:
-                    logging.warning(f"Skipping duplicate record in {table_name}: {e}")
-        
+                    logging.warning(f"Could not add ProjectInformation_id to {table_name}: {e}")
+
+            # Insert data from source, preserving ProjectInformation_id
+            source_col_names = [col[1] for col in source_columns]
+            select_cols = ", ".join(f'"{col}"' for col in source_col_names if col.lower() in target_col_names)
+            insert_cols = ", ".join(f'"{col}"' for col in target_col_names.values())  # Include ProjectInformation_id
+
+            insert_sql = f'''
+                INSERT INTO "{table_name}" ({insert_cols})
+                SELECT {select_cols}, (SELECT "ProjectInformation_id" FROM "ProjectInformation" ORDER BY "ProjectInformation_id" DESC LIMIT 1)
+                FROM "{table_name}"
+            '''
+            print(f"Merging data with SQL: {insert_sql}")  # Debugging
+            logging.debug(f"Merging data with SQL: {insert_sql}")
+            self._execute_with_retry(target_db, insert_sql)
+
             target_db.commit()
-        
+            print(f"Successfully merged table {table_name}")  # Debugging
+
         except Exception as e:
             target_db.rollback()
-            logging.error(f"Error merging table {table_name} with columns {source_columns}: {e}")
+            logging.error(f"Error merging table {table_name}: {e}")
             raise
