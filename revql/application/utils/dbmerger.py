@@ -273,12 +273,15 @@ class DatabaseMerger:
         """Create new table and copy all data, preserving ProjectInformation_id"""
         temp_name = f"{table_name}_temp_{int(time.time())}"
         self._temp_tables.add(temp_name)
-        
+    
         try:
             print(f"Copying table {table_name}")  # Debugging
+    
             # Generate column definitions
             col_defs = []
             col_names = []
+            has_project_information_id = False  # Flag to track if ProjectInformation_id is already added
+    
             for col in columns:
                 col_name = col[1]
                 col_type = col[2]
@@ -287,38 +290,59 @@ class DatabaseMerger:
                     col_defs.append(f'"{col_name}" {col_type} PRIMARY KEY AUTOINCREMENT')
                 else:
                     col_defs.append(f'"{col_name}" {col_type}')
-        
-            # Add ProjectInformation_id column
-            col_defs.append('"ProjectInformation_id" INTEGER')
-            col_names.append('"ProjectInformation_id"')
-        
+    
+            # Add ProjectInformation_id column if it doesn't exist
+            if not any(col[1].lower() == 'projectinformation_id' for col in columns):
+                col_defs.append('"ProjectInformation_id" INTEGER')
+                col_names.append('"ProjectInformation_id"')
+                has_project_information_id = True
+    
             # Create table
             create_sql = f'CREATE TABLE "{temp_name}" ({", ".join(col_defs)})'
             print(f"Creating table with SQL: {create_sql}")  # Debugging
             logging.debug(f"Creating table with SQL: {create_sql}")
             self._execute_with_retry(target_db, create_sql)
-        
+    
             # Copy data from source, preserving ProjectInformation_id
             source_col_names = [col[1] for col in columns]
             select_cols = ", ".join(f'"{col}"' for col in source_col_names)
             insert_cols = ", ".join(f'"{col}"' for col in col_names)  # Include ProjectInformation_id
-        
-            insert_sql = f'''
-                INSERT INTO "{temp_name}" ({insert_cols})
-                SELECT {select_cols}, (SELECT "ProjectInformation_id" FROM "ProjectInformation" ORDER BY "ProjectInformation_id" DESC LIMIT 1)
-                FROM "{table_name}"
-            '''
-            print(f"Copying data with SQL: {insert_sql}")  # Debugging
-            logging.debug(f"Copying data with SQL: {insert_sql}")
-            self._execute_with_retry(source_db, insert_sql)
-        
+    
+            # Fetch the ProjectInformation_id from the ProjectInformation table
+            get_project_info_id_sql = 'SELECT "ProjectInformation_id" FROM "ProjectInformation" ORDER BY "ProjectInformation_id" DESC LIMIT 1'
+            self._execute_with_retry(target_db, get_project_info_id_sql)
+            project_information_id = target_db.cursor.fetchone()
+            project_information_id_value = project_information_id[0] if project_information_id else None
+    
+            if has_project_information_id:
+                insert_sql = f'''
+                    INSERT INTO "{temp_name}" ({insert_cols})
+                    SELECT {select_cols}, ?
+                    FROM "{table_name}"
+                '''
+                print(f"Copying data with SQL: {insert_sql}")  # Debugging
+                logging.debug(f"Copying data with SQL: {insert_sql}")
+                self._execute_with_retry(target_db, insert_sql, (project_information_id_value,))
+            else:
+                insert_sql = f'''
+                    INSERT INTO "{temp_name}" ({insert_cols})
+                    SELECT {select_cols}
+                    FROM "{table_name}"
+                '''
+                print(f"Copying data with SQL: {insert_sql}")  # Debugging
+                logging.debug(f"Copying data with SQL: {insert_sql}")
+                self._execute_with_retry(target_db, insert_sql)
+    
             # Replace original table
             self._execute_with_retry(target_db, f'DROP TABLE "{table_name}"')
             self._execute_with_retry(target_db, f'ALTER TABLE "{temp_name}" RENAME TO "{table_name}"')
-        
+    
+            # Remove and delete empty columns
+            self._cleanup_table_columns(target_db, table_name)
+    
             target_db.commit()
             print(f"Successfully copied table {table_name}")  # Debugging
-        
+    
         except Exception as e:
             target_db.rollback()
             logging.error(f"Error copying table {table_name}: {e}")
@@ -331,10 +355,11 @@ class DatabaseMerger:
         """Merge data into existing table, preserving ProjectInformation_id"""
         try:
             print(f"Merging existing table {table_name}")  # Debugging
+        
             # Get target table schema
             target_columns = self._get_table_schema(target_db, table_name)
             target_col_names = {col[1].lower(): col[1] for col in target_columns}
-
+        
             # Add missing columns from source
             for col in source_columns:
                 col_name = col[1]
@@ -347,7 +372,7 @@ class DatabaseMerger:
                         logging.info(f"Added column {col_name} to {table_name}")
                     except sqlite3.OperationalError as e:
                         logging.warning(f"Could not add column {col_name} to {table_name}: {e}")
-
+        
             # Add ProjectInformation_id if missing
             if 'projectinformation_id' not in target_col_names:
                 try:
@@ -357,24 +382,62 @@ class DatabaseMerger:
                     logging.info(f"Added ProjectInformation_id to {table_name}")
                 except sqlite3.OperationalError as e:
                     logging.warning(f"Could not add ProjectInformation_id to {table_name}: {e}")
-
+        
             # Insert data from source, preserving ProjectInformation_id
             source_col_names = [col[1] for col in source_columns]
             select_cols = ", ".join(f'"{col}"' for col in source_col_names if col.lower() in target_col_names)
             insert_cols = ", ".join(f'"{col}"' for col in target_col_names.values())  # Include ProjectInformation_id
-
+        
+            # Fetch the ProjectInformation_id from the ProjectInformation table
+            get_project_info_id_sql = 'SELECT "ProjectInformation_id" FROM "ProjectInformation" ORDER BY "ProjectInformation_id" DESC LIMIT 1'
+            self._execute_with_retry(target_db, get_project_info_id_sql)
+            project_information_id = target_db.cursor.fetchone()
+            project_information_id_value = project_information_id[0] if project_information_id else None
+        
+            # Construct the insert SQL statement
             insert_sql = f'''
                 INSERT INTO "{table_name}" ({insert_cols})
-                SELECT {select_cols}, (SELECT "ProjectInformation_id" FROM "ProjectInformation" ORDER BY "ProjectInformation_id" DESC LIMIT 1)
+                SELECT {select_cols}
                 FROM "{table_name}"
             '''
             print(f"Merging data with SQL: {insert_sql}")  # Debugging
             logging.debug(f"Merging data with SQL: {insert_sql}")
-            self._execute_with_retry(target_db, insert_sql)
-
+        
+            # Check if table is OmniClassNumbers and handle unique constraint
+            if table_name in ("OmniClassNumbers", "WireTemperatureRatingTypes", "ElectricalLoadClassificationParameterElement", "ElectricalLoadClassifications", "FluidTypes", "HVACLoadSchedules", "MechanicalEquipmentSetTypes", "PanelScheduleTemplatesBranchPanel", "PanelScheduleTemplatesDataPanel", "PanelScheduleTemplatesSwitchboard", "Phases", "PipeAccessoryTypes", "PipeConnectionTypes", "PipeFittingTypes", "PipeMaterialTypes", "PipeScheduleTypes", "PipeSegments", "PipingSystemTypes", "PlumbingFixtureTypes", "SpaceTypeSettings"):
+                source_data = source_db.cursor.execute(f'SELECT * FROM "{table_name}"').fetchall()
+                for row in source_data:
+                    # Check if record exists in target
+                    primary_key_column = f"{table_name}_id"  # Assuming primary key column name
+                    check_sql = f'''SELECT 1 FROM "{table_name}" WHERE "{primary_key_column}" = ?'''
+                    target_db.cursor.execute(check_sql, (row[0],))
+                    if target_db.cursor.fetchone() is None:
+                        # Insert the record
+                        insert_sql = f'''INSERT INTO "{table_name}" VALUES ({', '.join(['?'] * len(row))})'''
+                        try:
+                            target_db.cursor.execute(insert_sql, row)
+                        except sqlite3.IntegrityError as e:
+                            logging.warning(f"Skipping duplicate record in {table_name}: {e}")
+            else:
+                self._execute_with_retry(source_db, insert_sql)
+        
+            # Update ProjectInformation_id for null values
+            if 'projectinformation_id' in target_col_names:
+                update_sql = f'''
+                    UPDATE "{table_name}"
+                    SET "ProjectInformation_id" = ?
+                    WHERE "ProjectInformation_id" IS NULL
+                '''
+                print(f"Updating ProjectInformation_id with SQL: {update_sql}")  # Debugging
+                logging.debug(f"Updating ProjectInformation_id with SQL: {update_sql}")
+                self._execute_with_retry(target_db, update_sql, (project_information_id_value,))
+        
+            # Remove and delete empty columns
+            self._cleanup_table_columns(target_db, table_name)
+        
             target_db.commit()
             print(f"Successfully merged table {table_name}")  # Debugging
-
+        
         except Exception as e:
             target_db.rollback()
             logging.error(f"Error merging table {table_name}: {e}")
