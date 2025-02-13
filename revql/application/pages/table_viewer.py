@@ -3,10 +3,12 @@ from tkinter import ttk, filedialog, messagebox
 from revql.application.utils.db_connection import DatabaseConnection
 from revql.application.utils.db_utils import get_table_data, count_tables
 from revql.application.utils.tablesorter import TableSorter
-from revql.application.pages.tabledeletionpopup import confirm_delete_empty_tables
-from revql.application.relationmanagement.matchratiocalc import find_matching_table_column_names
 from revql.application.pages.relationratioviewer import RelationRatioViewer
 from revql.application.pages.column_viewer import ColumnViewer
+from ..utils.dbmerger import DatabaseMerger
+from revql.application.relationmanagement.idrefactor import rename_id_columns_and_create_relations
+import logging
+from revql.application.utils.db_utils import find_matching_table_column_names
 
 class TableViewerApp:
     def __init__(self):
@@ -35,6 +37,9 @@ class TableViewerApp:
 
         self.create_relationships_button = ttk.Button(self.frame, text="Create Relations", command=self.create_relationships)
         self.create_relationships_button.grid(row=0, column=4, sticky=tk.W)
+        
+        self.merge_button = ttk.Button(self.frame, text="Merge Database", command=self.merge_database)
+        self.merge_button.grid(row=0, column=5, sticky=tk.W)
 
         self.columns = ("Table Name", "Row Count", "Column Count")
         self.tree = ttk.Treeview(self.frame, columns=self.columns, show="headings")
@@ -104,6 +109,48 @@ class TableViewerApp:
             return
 
         ColumnViewer(self.root, db_path, table_name)
+
+    def merge_database(self):
+        if not self.db_path_entry.get():
+            messagebox.showwarning("No Target Database", "Please select a target database first.")
+            return
+
+        source_db = filedialog.askopenfilename(
+            title="Select Source Database to Merge",
+            filetypes=(("SQLite Database Files", "*.db"), ("All Files", "*.*"))
+        )
+        
+        if not source_db:
+            return
+
+        if messagebox.askyesno("Confirm Merge", 
+                              "This will create relationships in both databases and then merge them. Continue?"):
+            try:
+                # First, create relationships in source database
+                matching_info_source = find_matching_table_column_names(source_db)
+                if matching_info_source[1]:  # Check if there are data matches
+                    rename_id_columns_and_create_relations(source_db, matching_info_source[1])
+                else:
+                    messagebox.showinfo("Info", "No relationships found in source database.")
+                
+                # Then, create relationships in target database
+                matching_info_target = find_matching_table_column_names(self.db_path_entry.get())
+                if matching_info_target[1]:  # Check if there are data matches
+                    rename_id_columns_and_create_relations(self.db_path_entry.get(), matching_info_target[1])
+                else:
+                    messagebox.showinfo("Info", "No relationships found in target database.")
+                
+                # Finally, perform the merge
+                merger = DatabaseMerger(source_db, self.db_path_entry.get())
+                if merger.merge_databases():
+                    messagebox.showinfo("Success", "Databases processed and merged successfully!")
+                    self.display_table_data()  # Refresh the display
+                else:
+                    messagebox.showerror("Error", "Failed to merge databases. Check the logs for details.")
+                    
+            except Exception as e:
+                messagebox.showerror("Error", f"An error occurred during the process: {str(e)}")
+                logging.error(f"Database merge error: {str(e)}", exc_info=True)
 
 if __name__ == "__main__":
     app = TableViewerApp()

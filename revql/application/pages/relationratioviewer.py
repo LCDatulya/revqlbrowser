@@ -6,7 +6,6 @@ from ..relationmanagement.idrefactor import rename_id_columns_and_create_relatio
 from ..utils.db_utils import delete_empty_columns, delete_empty_tables
 from ..utils.db_connection import DatabaseConnection
 from ..relationmanagement.projectmanagement import ensure_project_information_id
-from .projectselectionpopup import ProjectSelectionPopup
 import logging
 
 class RelationRatioViewer:
@@ -78,15 +77,14 @@ class RelationRatioViewer:
                 return
         
             rename_id_columns_and_create_relations(self.db_path, self.data_matches)
-        
-            ProjectSelectionPopup(self.top, self.db_path, self.update_project_information_id)
+            self.update_project_information_id()
         
         except Exception as e:
             print(f"Critical error: {str(e)}")
             messagebox.showerror("Error", f"An error occurred: {str(e)}")
             raise
 
-    def update_project_information_id(self, project_id):
+    def update_project_information_id(self):
         """Update ProjectInformation_id for new data."""
         db = DatabaseConnection(self.db_path)
         cursor = db.cursor
@@ -99,7 +97,7 @@ class RelationRatioViewer:
                 continue
                 
             try:
-                cursor.execute(f'UPDATE "{table_name}" SET "ProjectInformation_id" = ? WHERE "ProjectInformation_id" IS NULL', (project_id,))
+                cursor.execute(f'UPDATE "{table_name}" SET "ProjectInformation_id" = (SELECT "ProjectInformation_id" FROM "ProjectInformation" ORDER BY "ProjectInformation_id" DESC LIMIT 1) WHERE "ProjectInformation_id" IS NULL')
             except sqlite3.OperationalError as e:
                 logging.warning(f"Could not update ProjectInformation_id in {table_name}: {e}")
         

@@ -1,4 +1,53 @@
 import sqlite3
+import sqlite3
+import logging
+from revql.application.utils.db_connection import DatabaseConnection
+from typing import List, Tuple, Dict
+
+def find_matching_table_column_names(db_path: str) -> Tuple[List[Tuple[str, str, str, float, float]], List[Tuple[str, str, str, float, float]]]:
+    """Find matching table-column names in the database."""
+    db = sqlite3.connect(db_path)
+    cursor = db.cursor()
+    
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+    tables = cursor.fetchall()
+    
+    name_matches = []
+    data_matches = []
+    
+    for table in tables:
+        table_name = table[0]
+        cursor.execute(f'PRAGMA table_info("{table_name}");')
+        columns = cursor.fetchall()
+        
+        for col in columns:
+            col_name = col[1]
+            # Find matching columns in other tables
+            for other_table in tables:
+                other_table_name = other_table[0]
+                if other_table_name == table_name:
+                    continue
+                
+                cursor.execute(f'PRAGMA table_info("{other_table_name}");')
+                other_columns = cursor.fetchall()
+                
+                for other_col in other_columns:
+                    other_col_name = other_col[1]
+                    if col_name == other_col_name:
+                        # Calculate match ratio and data overlap
+                        cursor.execute(f'SELECT COUNT(*) FROM "{table_name}" WHERE "{col_name}" IS NOT NULL')
+                        count1 = cursor.fetchone()[0]
+                        cursor.execute(f'SELECT COUNT(*) FROM "{other_table_name}" WHERE "{other_col_name}" IS NOT NULL')
+                        count2 = cursor.fetchone()[0]
+                        overlap = min(count1, count2) / max(count1, count2) * 100 if max(count1, count2) > 0 else 0
+                        ratio = 1.0  # Placeholder for actual match ratio calculation
+                        
+                        name_matches.append((table_name, col_name, other_table_name, ratio, overlap))
+                        data_matches.append((table_name, col_name, other_table_name, ratio, overlap))
+    
+    db.close()
+    return name_matches, data_matches
+
 
 def get_table_data(db_path):
     conn = sqlite3.connect(db_path)
@@ -73,30 +122,72 @@ def delete_empty_tables(db_path):
         
     finally:
         conn.close()
+
+def delete_empty_columns(db_path: str, table_name: str) -> None:
+    """Delete empty columns from a table, skipping primary keys and handling locks"""
+    db = None
+    try:
+        db = DatabaseConnection(db_path)
+        cursor = db.cursor
         
-def delete_empty_columns(db_path, table_name):
-    # Skip sqlite_sequence table
-    if table_name == 'sqlite_sequence':
-        return
-
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-
-    # Get the column names
-    cursor.execute(f"PRAGMA table_info({table_name})")
-    columns = [info[1] for info in cursor.fetchall()]
-
-    # Check each column for emptiness
-    empty_columns = []
-    for column in columns:
-        cursor.execute(f"SELECT COUNT(*) FROM {table_name} WHERE {column} IS NOT NULL AND {column} != ''")
-        count = cursor.fetchone()[0]
-        if count == 0:
-            empty_columns.append(column)
-
-    # Delete empty columns
-    for column in empty_columns:
-        cursor.execute(f"ALTER TABLE {table_name} DROP COLUMN {column}")
-
-    conn.commit()
-    conn.close()
+        # Get table info including primary key information
+        cursor.execute(f'PRAGMA table_info("{table_name}")')
+        columns = cursor.fetchall()
+        
+        # Create new table without empty columns
+        temp_table = f"{table_name}_temp"
+        keep_columns = []
+        
+        for col in columns:
+            column_name = col[1]
+            column_type = col[2]
+            is_pk = col[5]  # Check if column is primary key
+            
+            # Skip primary keys and ProjectInformation_id
+            if is_pk or column_name == "ProjectInformation_id":
+                keep_columns.append((column_name, column_type))
+                continue
+            
+            # Check if column is empty
+            cursor.execute(f'SELECT COUNT(*) FROM "{table_name}" WHERE "{column_name}" IS NOT NULL')
+            non_null_count = cursor.fetchone()[0]
+            
+            if non_null_count > 0:
+                keep_columns.append((column_name, column_type))
+        
+        # Create new table with remaining columns
+        create_columns = []
+        for col_name, col_type in keep_columns:
+            if col_name == f"{table_name}_id":
+                create_columns.append(f'"{col_name}" {col_type} PRIMARY KEY AUTOINCREMENT')
+            else:
+                create_columns.append(f'"{col_name}" {col_type}')
+        
+        cursor.execute(f'''
+            CREATE TABLE "{temp_table}" (
+                {", ".join(create_columns)}
+            )
+        ''')
+        
+        # Copy data from old table to new table
+        source_columns = [f'"{col[0]}"' for col in keep_columns]
+        cursor.execute(f'''
+            INSERT INTO "{temp_table}" ({", ".join(source_columns)})
+            SELECT {", ".join(source_columns)}
+            FROM "{table_name}"
+        ''')
+        
+        # Drop old table and rename new table
+        cursor.execute(f'DROP TABLE IF EXISTS "{table_name}"')
+        cursor.execute(f'ALTER TABLE "{temp_table}" RENAME TO "{table_name}"')
+        
+        db.commit()
+        
+    except sqlite3.Error as e:
+        if db:
+            db.rollback()
+        logging.warning(f"Error processing table {table_name}: {e}")
+    finally:
+        if db:
+            db.close()
+            
