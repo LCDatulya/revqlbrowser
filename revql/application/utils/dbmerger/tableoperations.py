@@ -7,15 +7,15 @@ import time
 class TableOperations:
     MAX_RETRIES = 3
     RETRY_DELAY = 0.5
-    
+
     @staticmethod
     def copy_table(source_db: DatabaseConnection, target_db: DatabaseConnection, 
                    table_name: str, columns: List[tuple], id_mapping: Dict[int, int]) -> None:
-        """Copy table logic"""
+        """Copy table logic with single-line SQL to avoid syntax issues"""
         temp_name = f"{table_name}_temp_{int(time.time())}"
         
         try:
-            print(f"Copying table {table_name}")
+            logging.info(f"Copying table {table_name}")
             
             # Generate column definitions
             col_defs = []
@@ -25,91 +25,157 @@ class TableOperations:
             for col in columns:
                 col_name = col[1]
                 col_lower = col_name.lower()
-                
                 if col_lower in processed_cols:
                     continue
-                    
                 processed_cols.add(col_lower)
                 col_type = col[2]
                 col_names.append(f'"{col_name}"')
-                
                 if col[5]:  # Is primary key
-                    col_defs.append(f'"{col_name}" {col_type} PRIMARY KEY AUTOINCREMENT')
+                    # Remove AUTOINCREMENT if it creates issues and use PRIMARY KEY only.
+                    col_defs.append(f'"{col_name}" {col_type} PRIMARY KEY')
                 else:
                     col_defs.append(f'"{col_name}" {col_type}')
 
-            # Add ProjectInformation_id if needed
+            # Ensure ProjectInformation_id exists
             if 'projectinformation_id' not in processed_cols:
                 col_defs.append('"ProjectInformation_id" INTEGER')
                 col_names.append('"ProjectInformation_id"')
 
-            # Create table
+            # Create temporary table
             create_sql = f'CREATE TABLE "{temp_name}" ({", ".join(col_defs)})'
             target_db.cursor.execute(create_sql)
 
-            # Copy data with ID mapping
+            # Build SELECT query from source table
             select_cols = []
             for col_name in col_names:
                 if col_name.lower() != '"projectinformation_id"':
                     select_cols.append(col_name)
-            
             case_stmt = []
             for old_id, new_id in id_mapping.items():
                 case_stmt.append(f"WHEN {old_id} THEN {new_id}")
-                
             select_sql = ", ".join(select_cols)
             if case_stmt:
-                select_sql += f''', CASE "ProjectInformation_id" {" ".join(case_stmt)} 
-                                  ELSE "ProjectInformation_id" END'''
+                select_sql += f', CASE "ProjectInformation_id" {" ".join(case_stmt)} ELSE "ProjectInformation_id" END'
             else:
                 select_sql += ', "ProjectInformation_id"'
 
-            insert_sql = f'''
-                INSERT INTO "{temp_name}" ({", ".join(col_names)})
-                SELECT {select_sql}
-                FROM "{table_name}"
-            '''
+            # Build the INSERT query in one line
+            insert_sql = "INSERT INTO \"{temp}\" ({cols}) SELECT {sel} FROM \"{tbl}\"".format(
+                temp=temp_name,
+                cols=", ".join(col_names),
+                sel=select_sql,
+                tbl=table_name
+            )
             source_db.cursor.execute(insert_sql)
 
-            # Replace original table
+            # Replace original table with the temporary one
             target_db.cursor.execute(f'DROP TABLE IF EXISTS "{table_name}"')
             target_db.cursor.execute(f'ALTER TABLE "{temp_name}" RENAME TO "{table_name}"')
+            target_db.commit()
 
         except Exception as e:
             logging.error(f"Error copying table {table_name}: {e}")
             raise
 
     @staticmethod
-    def merge_existing_table(source_db: DatabaseConnection, target_db: DatabaseConnection,
-                            table_name: str, columns: List[tuple], id_mapping: Dict[int, int]) -> None:
-        """Merge table logic"""
+    def merge_existing_table(source_db: DatabaseConnection, target_db: DatabaseConnection, 
+                             table_name: str, columns: List[tuple], id_mapping: Dict[int, int]) -> None:
+        """Merge table logic handling duplicate columns"""
         try:
-            print(f"Merging existing table {table_name}")
-        
-            # Get data from source table
-            source_db.cursor.execute(f'SELECT * FROM "{table_name}"')
-            source_data = source_db.cursor.fetchall()
-            
-            # Get column names
+            logging.info(f"Merging existing table {table_name}")
+    
+            # Get source columns
             source_db.cursor.execute(f'PRAGMA table_info("{table_name}")')
-            source_columns = [col[1] for col in source_db.cursor.fetchall()]
-            
-            for row in source_data:
-                row_dict = dict(zip(source_columns, row))
-                if 'ProjectInformation_id' in row_dict:
-                    old_id = row_dict['ProjectInformation_id']
-                    row_dict['ProjectInformation_id'] = id_mapping.get(old_id, old_id)
-                    
-                columns = ', '.join(f'"{col}"' for col in row_dict.keys())
-                placeholders = ', '.join('?' for _ in row_dict)
-                insert_sql = f'INSERT OR IGNORE INTO "{table_name}" ({columns}) VALUES ({placeholders})'
-                
-                target_db.cursor.execute(insert_sql, list(row_dict.values()))
-                
-            target_db.commit()
-            print(f"Successfully merged table {table_name}")
-            
+            source_columns = {}
+            for col in source_db.cursor.fetchall():
+                col_name = col[1]
+                col_lower = col_name.lower()
+                if col_lower not in source_columns:
+                    source_columns[col_lower] = {
+                        'name': col_name,
+                        'type': col[2],
+                        'notnull': col[3],
+                        'pk': col[5]
+                    }
+    
+            # Get target columns
+            target_db.cursor.execute(f'PRAGMA table_info("{table_name}")')
+            target_columns = {}
+            for col in target_db.cursor.fetchall():
+                col_name = col[1]
+                col_lower = col_name.lower()
+                if col_lower not in target_columns:
+                    target_columns[col_lower] = {
+                        'name': col_name,
+                        'type': col[2],
+                        'notnull': col[3],
+                        'pk': col[5]
+                    }
+    
+            # Get column positions for data mapping
+            source_db.cursor.execute(f'PRAGMA table_info("{table_name}")')
+            source_column_positions = {}
+            seen_columns = set()
+            for i, col in enumerate(source_db.cursor.fetchall()):
+                col_name = col[1]
+                col_lower = col_name.lower()
+                if col_lower not in seen_columns:
+                    source_column_positions[col_lower] = i
+                    seen_columns.add(col_lower)
+    
+            available_columns = [col_lower for col_lower in source_columns.keys() 
+                               if col_lower in target_columns]
+    
+            if not available_columns:
+                logging.error(f"No matching columns found for table {table_name}")
+                return
+    
+            columns_sql = ', '.join(f'"{target_columns[col_lower]["name"]}"' for col_lower in available_columns)
+            placeholders = ', '.join('?' for _ in available_columns)
+            insert_sql = f'INSERT OR IGNORE INTO "{table_name}" ({columns_sql}) VALUES ({placeholders})'
+    
+            source_db.cursor.execute(f'SELECT * FROM "{table_name}"')
+            batch_size = 100
+            while True:
+                rows = source_db.cursor.fetchmany(batch_size)
+                if not rows:
+                    break
+                batch_data = []
+                for row in rows:
+                    values = []
+                    for col_lower in available_columns:
+                        pos = source_column_positions.get(col_lower)
+                        if pos is not None:
+                            val = row[pos]
+                            if col_lower == 'projectinformation_id' and val in id_mapping:
+                                val = id_mapping[val]
+                            values.append(val)
+                        else:
+                            values.append(None)
+                    batch_data.append(values)
+                try:
+                    target_db.cursor.executemany(insert_sql, batch_data)
+                    target_db.commit()
+                except sqlite3.Error as e:
+                    logging.error(f"Error inserting batch in {table_name}: {e}")
+                    target_db.rollback()
+    
+            logging.info(f"Successfully merged table {table_name}")
+    
         except Exception as e:
             target_db.rollback()
-            logging.error(f"Error merging table {table_name}: {e}")
+            logging.error(f"Error merging table {table_name}: {e}", exc_info=True)
             raise
+
+    @staticmethod
+    def table_exists(db: DatabaseConnection, table_name: str) -> bool:
+        """Check if a table exists in the database."""
+        try:
+            db.cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,)
+            )
+            result = db.cursor.fetchone()
+            return result is not None
+        except Exception as e:
+            logging.error(f"Error checking if table exists: {e}")
+            return False
