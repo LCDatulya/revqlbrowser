@@ -87,7 +87,7 @@ def rename_id_columns(db, tracker):
                         cursor.execute(f'DROP TABLE IF EXISTS "{temp_table}";')
                         db.commit()
     db.commit()
-    
+
 def rename_id_columns_and_create_relations(db_path: str, matching_info):
     db = DatabaseConnection(db_path)
     tracker = RenameTracker()
@@ -96,8 +96,16 @@ def rename_id_columns_and_create_relations(db_path: str, matching_info):
         # --- Step 1: Rename id columns & add primary keys where needed ---
         rename_id_columns(db, tracker)
 
-        # --- Step 2: Add ProjectInformation_id column to all tables ---
+        # --- NEW STEP: Ensure "DisciplineModel" column exists in ProjectInformation ---
         cursor = db.cursor
+        cursor.execute('PRAGMA table_info("ProjectInformation");')
+        cols = [col[1].lower() for col in cursor.fetchall()]
+        if 'disciplinemodel' not in cols:
+            cursor.execute('ALTER TABLE "ProjectInformation" ADD COLUMN "DisciplineModel" TEXT')
+            logging.info('Added column "DisciplineModel" to table "ProjectInformation".')
+        db.commit()
+
+        # --- Step 2: Add ProjectInformation_id column to all tables ---
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
         tables = cursor.fetchall()
         for table in tables:
@@ -110,7 +118,26 @@ def rename_id_columns_and_create_relations(db_path: str, matching_info):
             column_names = [col[1] for col in columns]
 
             if 'ProjectInformation_id' not in column_names:
-                cursor.execute(f'ALTER TABLE "{table_name}" ADD COLUMN "ProjectInformation_id" INTEGER')
+                # Drop existing temporary table if it exists
+                new_table_name = f"{table_name}_new"
+                cursor.execute(f'DROP TABLE IF EXISTS "{new_table_name}"')
+
+                # Create a new table with the foreign key constraint
+                column_defs = [f'"{col[1]}" {col[2]}' for col in columns]
+                column_defs.append('"ProjectInformation_id" INTEGER')
+                column_defs.append('FOREIGN KEY("ProjectInformation_id") REFERENCES "ProjectInformation"("ProjectInformation_id")')
+                create_sql = f'CREATE TABLE "{new_table_name}" ({", ".join(column_defs)})'
+                cursor.execute(create_sql)
+
+                # Copy data from the old table to the new table
+                old_columns = [col[1] for col in columns]
+                old_columns.append('ProjectInformation_id')
+                insert_sql = f'INSERT INTO "{new_table_name}" ({", ".join(old_columns)}) SELECT {", ".join(old_columns)} FROM "{table_name}"'
+                cursor.execute(insert_sql)
+
+                # Replace the old table with the new table
+                cursor.execute(f'DROP TABLE "{table_name}"')
+                cursor.execute(f'ALTER TABLE "{new_table_name}" RENAME TO "{table_name}"')
 
         db.commit()
 
@@ -173,8 +200,11 @@ def rename_id_columns_and_create_relations(db_path: str, matching_info):
                 for _, fk_col, match_table in fk_columns:
                     new_col_defs.append(f'FOREIGN KEY("{fk_col}") REFERENCES "{match_table}"("{match_table}_id")')
                 
-                # Create new table
+                # Drop existing temporary table if it exists
                 new_table = f"{table_name}_new"
+                cursor.execute(f'DROP TABLE IF EXISTS "{new_table}"')
+
+                # Create new table
                 create_sql = f'CREATE TABLE "{new_table}" ({", ".join(new_col_defs)})'
                 cursor.execute(create_sql)
                 

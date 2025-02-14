@@ -6,7 +6,7 @@ import logging
 class ProjectInformationHandler:
     @staticmethod
     def ensure_project_information_table(db: DatabaseConnection) -> None:
-        """Handle ProjectInformation table setup"""
+        """Handle ProjectInformation table setup ensuring DisciplineModel exists"""
         try:
             db.cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='ProjectInformation'")
             table_exists = db.cursor.fetchone() is not None
@@ -23,11 +23,18 @@ class ProjectInformationHandler:
                         "ProjectName" TEXT,
                         "ProjectNumber" TEXT,
                         "ClientAddress" TEXT,
-                        "ChannelDefinitions" TEXT
+                        "ChannelDefinitions" TEXT,
+                        "DisciplineModel" TEXT
                     )
                 ''')
-                logging.info("Created ProjectInformation table")
-
+                logging.info("Created ProjectInformation table with DisciplineModel column")
+            else:
+                # Table exists; make sure DisciplineModel exists
+                db.cursor.execute('PRAGMA table_info("ProjectInformation")')
+                cols = [row[1].lower() for row in db.cursor.fetchall()]
+                if "disciplinemodel" not in cols:
+                    logging.info("Adding DisciplineModel column to existing ProjectInformation table")
+                    db.cursor.execute('ALTER TABLE "ProjectInformation" ADD COLUMN "DisciplineModel" TEXT')
             db.commit()
 
         except Exception as e:
