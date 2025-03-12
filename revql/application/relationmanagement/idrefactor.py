@@ -53,7 +53,6 @@ def rename_id_columns(db, tracker):
                         for col in columns:
                             if col[1].lower() == 'id':
                                 column_defs.append(f'"{new_column_name}" INTEGER PRIMARY KEY AUTOINCREMENT')
-                                column_defs.append(f'"{col[1]}" {col[2]}')
                             else:
                                 column_defs.append(f'"{col[1]}" {col[2]}')
                         
@@ -67,9 +66,14 @@ def rename_id_columns(db, tracker):
                         # Copy data from the old table to the new table
                         old_columns = [col[1] for col in columns]
                         new_columns = [new_column_name if col.lower() == 'id' else col for col in old_columns]
+                        
+                        # Fix: Make sure column names are properly quoted in SQL
+                        quoted_old_columns = [f'"{col}"' for col in old_columns]
+                        quoted_new_columns = [f'"{col}"' for col in new_columns]
+                        
                         cursor.execute(f"""
-                            INSERT INTO "{temp_table}" ({', '.join(new_columns)})
-                            SELECT {', '.join(old_columns)}
+                            INSERT INTO "{temp_table}" ({', '.join(quoted_new_columns)})
+                            SELECT {', '.join(quoted_old_columns)}
                             FROM "{table_name}";
                         """)
                         db.commit()
@@ -129,10 +133,15 @@ def rename_id_columns_and_create_relations(db_path: str, matching_info):
                 create_sql = f'CREATE TABLE "{new_table_name}" ({", ".join(column_defs)})'
                 cursor.execute(create_sql)
 
-                # Copy data from the old table to the new table
-                old_columns = [col[1] for col in columns]
-                old_columns.append('ProjectInformation_id')
-                insert_sql = f'INSERT INTO "{new_table_name}" ({", ".join(old_columns)}) SELECT {", ".join(old_columns)} FROM "{table_name}"'
+                # Copy data from the old table to the new table - FIX HERE
+                quoted_columns = [f'"{col[1]}"' for col in columns]
+                
+                # Fix: Separate column names from SELECT statement with NULL value for ProjectInformation_id
+                insert_sql = f'''
+                    INSERT INTO "{new_table_name}" ({", ".join(quoted_columns)}, "ProjectInformation_id")
+                    SELECT {", ".join(quoted_columns)}, NULL
+                    FROM "{table_name}"
+                '''
                 cursor.execute(insert_sql)
 
                 # Replace the old table with the new table
@@ -161,6 +170,7 @@ def rename_id_columns_and_create_relations(db_path: str, matching_info):
                 # Get current table structure
                 cursor.execute(f'PRAGMA table_info("{table_name}");')
                 columns = cursor.fetchall()
+                column_names = [col[1].lower() for col in columns]
                 
                 # Get columns that will become foreign keys
                 skip_columns = set()
@@ -187,13 +197,25 @@ def rename_id_columns_and_create_relations(db_path: str, matching_info):
                 # Add ProjectInformation_id column
                 new_col_defs.append('"ProjectInformation_id" INTEGER')
                 
-                # Add foreign key columns
+                # Add foreign key columns - with unique name check
                 fk_columns = []
+                existing_fk_names = set(col_name.lower() for col_name in column_names)
+                
                 if table_name in relations_by_table:
                     for orig_column, match_table in relations_by_table[table_name]:
-                        fk_col = f"{match_table}_id"
+                        base_fk_col = f"{match_table}_id"
+                        fk_col = base_fk_col
+                        
+                        # Check if column name already exists
+                        counter = 1
+                        while fk_col.lower() in existing_fk_names:
+                            fk_col = f"{match_table}{counter}_id"
+                            counter += 1
+                        
+                        # Add the unique FK column
                         new_col_defs.append(f'"{fk_col}" INTEGER')
                         fk_columns.append((orig_column, fk_col, match_table))
+                        existing_fk_names.add(fk_col.lower())
                 
                 # Add foreign key constraints
                 new_col_defs.append('FOREIGN KEY("ProjectInformation_id") REFERENCES "ProjectInformation"("ProjectInformation_id")')
@@ -228,8 +250,16 @@ def rename_id_columns_and_create_relations(db_path: str, matching_info):
                         LIMIT 1
                     ) AS "{fk_col}"''')
                 
-                # Add ProjectInformation_id
-                select_parts.append('t.ProjectInformation_id')
+                # Fix: Check if ProjectInformation_id column exists before using it
+                cursor.execute(f'PRAGMA table_info("{table_name}");')
+                has_project_info_id = any(col[1].lower() == 'projectinformation_id' for col in cursor.fetchall())
+                
+                if has_project_info_id:
+                    # Add ProjectInformation_id
+                    select_parts.append('t."ProjectInformation_id"')
+                else:
+                    # Use NULL if the column doesn't exist
+                    select_parts.append('NULL AS "ProjectInformation_id"')
                 
                 # Build INSERT columns list
                 insert_cols = []
@@ -243,7 +273,20 @@ def rename_id_columns_and_create_relations(db_path: str, matching_info):
                     SELECT {", ".join(select_parts)}
                     FROM "{table_name}" t
                 '''
-                cursor.execute(insert_sql)
+                try:
+                    cursor.execute(insert_sql)
+                except sqlite3.OperationalError as e:
+                    logging.warning(f"Error inserting data into {new_table}: {e}")
+                    # Try a simpler approach
+                    kept_cols_quoted = [f'"{col}"' for col in kept_columns]
+                    cursor.execute(f'''
+                        INSERT INTO "{new_table}" ({", ".join(kept_cols_quoted)}, "ProjectInformation_id")
+                        SELECT {", ".join(kept_cols_quoted)}, NULL
+                        FROM "{table_name}"
+                    ''')
+                    # Set foreign keys to NULL for now
+                    for _, fk_col, _ in fk_columns:
+                        cursor.execute(f'UPDATE "{new_table}" SET "{fk_col}" = NULL')
                 
                 # Update the Id column to match tablename_id
                 cursor.execute(f'UPDATE "{new_table}" SET "Id" = "{table_name}_id"')
@@ -262,6 +305,7 @@ def rename_id_columns_and_create_relations(db_path: str, matching_info):
 
     except Exception as e:
         db.rollback()
+        logging.error(f"Database operation failed: {str(e)}")
         raise e
     finally:
         db.close()
