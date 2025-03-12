@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, simpledialog
 from revql.application.utils.db_connection import DatabaseConnection
 from revql.application.utils.db_utils import get_table_data, count_tables
 from revql.application.utils.tablesorter import TableSorter
@@ -100,15 +100,15 @@ class TableViewerApp:
     def on_table_double_click(self, event):
         item = self.tree.selection()[0]
         table_name = self.tree.item(item, "values")[0]
-        self.show_columns_window(table_name)
+        self.show_table_data_window(table_name)
 
-    def show_columns_window(self, table_name):
+    def show_table_data_window(self, table_name):
         db_path = self.db_path_entry.get()
         if not db_path:
             messagebox.showwarning("No Database", "Please select a database first.")
             return
 
-        ColumnViewer(self.root, db_path, table_name)
+        TableDataViewer(self.root, db_path, table_name)
 
     def merge_database(self):
         if not self.db_path_entry.get():
@@ -151,6 +151,169 @@ class TableViewerApp:
             except Exception as e:
                 messagebox.showerror("Error", f"An error occurred during the process: {str(e)}")
                 logging.error(f"Database merge error: {str(e)}", exc_info=True)
+
+class TableDataViewer:
+    def __init__(self, parent, db_path, table_name):
+        self.db_path = db_path
+        self.table_name = table_name
+
+        self.top = tk.Toplevel(parent)
+        self.top.title(f"Data in {table_name}")
+
+        self.frame = ttk.Frame(self.top, padding="10")
+        self.frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+
+        self.top.columnconfigure(0, weight=1)
+        self.top.rowconfigure(0, weight=1)
+        self.frame.columnconfigure(0, weight=1)
+        self.frame.rowconfigure(0, weight=1)
+
+        self.search_label = ttk.Label(self.frame, text="Search:")
+        self.search_label.grid(row=0, column=0, sticky=tk.W)
+
+        self.search_entry = ttk.Entry(self.frame, width=50)
+        self.search_entry.grid(row=0, column=1, sticky=(tk.W, tk.E))
+
+        self.search_button = ttk.Button(self.frame, text="Search", command=self.search_table)
+        self.search_button.grid(row=0, column=2, sticky=tk.W)
+
+        self.data_tree = ttk.Treeview(self.frame, show="headings", selectmode="extended")
+        self.data_tree.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S))
+
+        self.scrollbar = ttk.Scrollbar(self.frame, orient=tk.VERTICAL, command=self.data_tree.yview)
+        self.data_tree.configure(yscroll=self.scrollbar.set)
+        self.scrollbar.grid(row=1, column=3, sticky=(tk.N, tk.S))
+
+        self.delete_row_button = ttk.Button(self.frame, text="Delete Selected Rows", command=self.delete_selected_rows)
+        self.delete_row_button.grid(row=2, column=0, sticky=tk.W, pady=5)
+
+        self.delete_column_button = ttk.Button(self.frame, text="Delete Selected Columns", command=self.delete_selected_columns)
+        self.delete_column_button.grid(row=2, column=1, sticky=tk.W, pady=5)
+
+        self.data_tree.bind("<Double-1>", self.on_cell_double_click)
+        self.data_tree.bind("<Button-1>", self.on_column_click, add="+")
+
+        self.load_table_data()
+
+    def load_table_data(self):
+        db = DatabaseConnection(self.db_path)
+        cursor = db.cursor
+        cursor.execute(f'SELECT * FROM "{self.table_name}"')
+        rows = cursor.fetchall()
+
+        cursor.execute(f'PRAGMA table_info("{self.table_name}")')
+        columns = [col[1] for col in cursor.fetchall()]
+
+        self.data_tree["columns"] = columns
+        for col in columns:
+            self.data_tree.heading(col, text=col)
+            self.data_tree.column(col, width=100)
+
+        for row in rows:
+            self.data_tree.insert("", "end", values=row)
+
+    def delete_selected_rows(self):
+        selected_items = self.data_tree.selection()
+        if not selected_items:
+            messagebox.showwarning("No Selection", "Please select rows to delete.")
+            return
+
+        db = DatabaseConnection(self.db_path)
+        cursor = db.cursor
+
+        for item in selected_items:
+            row_values = self.data_tree.item(item, "values")
+            primary_key_value = row_values[0]  # Assuming the first column is the primary key
+            cursor.execute(f'DELETE FROM "{self.table_name}" WHERE rowid = ?', (primary_key_value,))
+            self.data_tree.delete(item)
+
+        db.commit()
+        db.close()
+        messagebox.showinfo("Success", "Selected rows deleted successfully.")
+
+    def delete_selected_columns(self):
+        selected_columns = self.data_tree.selection()
+        if not selected_columns:
+            messagebox.showwarning("No Selection", "Please select columns to delete.")
+            return
+
+        db = DatabaseConnection(self.db_path)
+        cursor = db.cursor
+
+        for col in selected_columns:
+            col_name = self.data_tree.heading(col, "text")
+            cursor.execute(f'ALTER TABLE "{self.table_name}" DROP COLUMN "{col_name}"')
+            self.data_tree.delete(col)
+
+        db.commit()
+        db.close()
+        messagebox.showinfo("Success", "Selected columns deleted successfully.")
+
+    def on_cell_double_click(self, event):
+        item = self.data_tree.selection()[0]
+        column = self.data_tree.identify_column(event.x)
+        column_index = int(column.replace("#", "")) - 1
+        column_name = self.data_tree["columns"][column_index]
+        old_value = self.data_tree.item(item, "values")[column_index]
+
+        new_value = simpledialog.askstring("Edit Cell", f"Enter new value for {column_name}:", initialvalue=old_value)
+        if new_value is not None:
+            self.update_cell_value(item, column_name, new_value)
+
+    def update_cell_value(self, item, column_name, new_value):
+        row_values = self.data_tree.item(item, "values")
+        primary_key_value = row_values[0]  # Assuming the first column is the primary key
+
+        db = DatabaseConnection(self.db_path)
+        cursor = db.cursor
+        cursor.execute(f'UPDATE "{self.table_name}" SET "{column_name}" = ? WHERE rowid = ?', (new_value, primary_key_value))
+        db.commit()
+        db.close()
+
+        row_values = list(row_values)
+        row_values[self.data_tree["columns"].index(column_name)] = new_value
+        self.data_tree.item(item, values=row_values)
+
+    def search_table(self):
+        search_value = self.search_entry.get()
+        if not search_value:
+            messagebox.showwarning("No Search Value", "Please enter a value to search.")
+            return
+
+        db = DatabaseConnection(self.db_path)
+        cursor = db.cursor
+        cursor.execute(f'SELECT * FROM "{self.table_name}"')
+        rows = cursor.fetchall()
+
+        cursor.execute(f'PRAGMA table_info("{self.table_name}")')
+        columns = [col[1] for col in cursor.fetchall()]
+
+        matches = []
+        for row in rows:
+            match_score = sum(search_value.lower() in str(value).lower() for value in row)
+            if match_score > 0:
+                matches.append((match_score, row))
+
+        matches.sort(reverse=True, key=lambda x: x[0])
+
+        self.data_tree.delete(*self.data_tree.get_children())
+        for _, row in matches:
+            self.data_tree.insert("", "end", values=row)
+
+    def on_column_click(self, event):
+        region = self.data_tree.identify_region(event.x, event.y)
+        if region == "heading":
+            column = self.data_tree.identify_column(event.x)
+            column_index = int(column.replace("#", "")) - 1
+            column_name = self.data_tree["columns"][column_index]
+
+            # Select all items in the column
+            for item in self.data_tree.get_children():
+                self.data_tree.selection_add(item)
+                self.data_tree.see(item)
+
+            # Highlight the column header
+            self.data_tree.heading(column, text=column_name, anchor="center")
 
 if __name__ == "__main__":
     app = TableViewerApp()
