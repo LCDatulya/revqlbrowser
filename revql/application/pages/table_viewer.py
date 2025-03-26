@@ -4,11 +4,12 @@ from revql.application.utils.db_connection import DatabaseConnection
 from revql.application.utils.db_utils import get_table_data, count_tables, find_matching_table_column_names, get_table_data, count_tables
 from revql.application.utils.tablesorter import TableSorter
 from revql.application.pages.relationratioviewer import RelationRatioViewer
-from revql.application.pages.column_viewer import ColumnViewer
 from ..utils.dbmerger import DatabaseMerger
 from revql.application.relationmanagement.idrefactor import rename_id_columns_and_create_relations
 import logging
 from revql.application.utils.db_utils import find_matching_table_column_names
+import os
+import sqlite3
 
 class TableViewerApp:
     def __init__(self):
@@ -98,9 +99,22 @@ class TableViewerApp:
         self.db_path_entry.insert(0, filename)
 
     def on_table_double_click(self, event):
-        item = self.tree.selection()[0]
-        table_name = self.tree.item(item, "values")[0]
-        self.show_table_data_window(table_name)
+        """Handle double-click on a table row."""
+        try:
+            # Get the selected item
+            selected_items = self.tree.selection()
+            if not selected_items:
+                # No item is selected, ignore the event
+                return
+
+            item = selected_items[0]
+            table_name = self.tree.item(item, "values")[0]
+
+            # Open the table data viewer
+            self.show_table_data_window(table_name)
+        except Exception as e:
+            logging.error(f"Error handling double-click: {e}")
+            messagebox.showerror("Error", f"An error occurred: {str(e)}")
 
     def show_table_data_window(self, table_name):
         db_path = self.db_path_entry.get()
@@ -114,7 +128,7 @@ class TableViewerApp:
         if not self.db_path_entry.get():
             messagebox.showwarning("No Target Database", "Please select a target database first.")
             return
-
+    
         source_db = filedialog.askopenfilename(
             title="Select Source Database to Merge",
             filetypes=(("SQLite Database Files", "*.db"), ("All Files", "*.*"))
@@ -122,35 +136,147 @@ class TableViewerApp:
         
         if not source_db:
             return
-
+    
         if messagebox.askyesno("Confirm Merge", 
-                              "This will create relationships in both databases and then merge them. Continue?"):
+                              "This will merge the source database into the target database while preserving project information. Continue?"):
             try:
-                # First, create relationships in source database
-                matching_info_source = find_matching_table_column_names(source_db)
-                if matching_info_source[1]:  # Check if there are data matches
-                    rename_id_columns_and_create_relations(source_db, matching_info_source[1])
-                else:
-                    messagebox.showinfo("Info", "No relationships found in source database.")
-                
-                # Then, create relationships in target database
-                matching_info_target = find_matching_table_column_names(self.db_path_entry.get())
-                if matching_info_target[1]:  # Check if there are data matches
-                    rename_id_columns_and_create_relations(self.db_path_entry.get(), matching_info_target[1])
-                else:
-                    messagebox.showinfo("Info", "No relationships found in target database.")
-                
-                # Finally, perform the merge
+                # Perform the merge - the DatabaseMerger now handles all preparation steps
                 merger = DatabaseMerger(source_db, self.db_path_entry.get())
                 if merger.merge_databases():
-                    messagebox.showinfo("Success", "Databases processed and merged successfully!")
-                    self.display_table_data()  # Refresh the display
+                    messagebox.showinfo("Success", "Database processed and merged successfully!")
+                    
+                    # Auto-fetch table data
+                    self.display_table_data()
                 else:
                     messagebox.showerror("Error", "Failed to merge databases. Check the logs for details.")
                     
             except Exception as e:
                 messagebox.showerror("Error", f"An error occurred during the process: {str(e)}")
                 logging.error(f"Database merge error: {str(e)}", exc_info=True)
+                
+    def prepare_source_database(self, db_path):
+        """Prepare source database by ensuring it has a valid ProjectInformation table."""
+        db = DatabaseConnection(db_path)
+        cursor = db.cursor
+        
+        try:
+            # Check if ProjectInformation table exists
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='ProjectInformation'")
+            if not cursor.fetchone():
+                # Create ProjectInformation table with proper primary key
+                cursor.execute('''
+                    CREATE TABLE "ProjectInformation" (
+                        "ProjectInformation_id" INTEGER PRIMARY KEY AUTOINCREMENT,
+                        "ProjectName" TEXT,
+                        "DisciplineModel" TEXT
+                    )
+                ''')
+
+                # Add default row
+                db_name = os.path.basename(db_path).replace('.db', '')
+                cursor.execute('''
+                    INSERT INTO "ProjectInformation" ("ProjectName", "DisciplineModel")
+                    VALUES (?, 'Default')
+                ''', (f"Source: {db_name}",))
+
+                db.commit()
+                logging.info(f"Created ProjectInformation table in source database: {db_path}")
+            else:
+                # Check if ProjectInformation_id exists and is a primary key
+                cursor.execute("PRAGMA table_info('ProjectInformation')")
+                columns = cursor.fetchall()
+                has_pi_id = False
+                has_id = False
+
+                for col in columns:
+                    col_name = col[1].lower()
+                    is_pk = col[5] == 1
+
+                    if col_name == 'projectinformation_id' and is_pk:
+                        has_pi_id = True
+                    elif col_name == 'id' and is_pk:
+                        has_id = True
+
+                # If there's no proper primary key, rebuild the table
+                if not has_pi_id:
+                    if has_id:
+                        # Rename id to ProjectInformation_id
+                        cursor.execute('''
+                            CREATE TABLE "ProjectInformation_temp" (
+                                "ProjectInformation_id" INTEGER PRIMARY KEY AUTOINCREMENT,
+                                "ProjectName" TEXT,
+                                "DisciplineModel" TEXT
+                            )
+                        ''')
+
+                        # Copy data, mapping id to ProjectInformation_id
+                        cursor.execute('''
+                            INSERT INTO "ProjectInformation_temp" 
+                            ("ProjectInformation_id", "ProjectName", "DisciplineModel")
+                            SELECT "id", 
+                                   COALESCE("ProjectName", 'Unknown Project'),
+                                   COALESCE("DisciplineModel", 'Default')
+                            FROM "ProjectInformation"
+                        ''')
+
+                        # Replace original table
+                        cursor.execute('DROP TABLE "ProjectInformation"')
+                        cursor.execute('ALTER TABLE "ProjectInformation_temp" RENAME TO "ProjectInformation"')
+                    else:
+                        # Create new table with proper structure
+                        cursor.execute('''
+                            CREATE TABLE "ProjectInformation_temp" (
+                                "ProjectInformation_id" INTEGER PRIMARY KEY AUTOINCREMENT,
+                                "ProjectName" TEXT,
+                                "DisciplineModel" TEXT
+                            )
+                        ''')
+
+                        # Try to preserve any existing data
+                        try:
+                            cursor.execute('''
+                                INSERT INTO "ProjectInformation_temp" 
+                                ("ProjectName", "DisciplineModel")
+                                SELECT 
+                                    COALESCE("ProjectName", 'Unknown Project'),
+                                    COALESCE("DisciplineModel", 'Default')
+                                FROM "ProjectInformation"
+                            ''')
+                        except sqlite3.OperationalError:
+                            # If columns don't exist, add a default row
+                            db_name = os.path.basename(db_path).replace('.db', '')
+                            cursor.execute('''
+                                INSERT INTO "ProjectInformation_temp" ("ProjectName", "DisciplineModel")
+                                VALUES (?, 'Default')
+                            ''', (f"Source: {db_name}",))
+
+                        # Replace original table
+                        cursor.execute('DROP TABLE "ProjectInformation"')
+                        cursor.execute('ALTER TABLE "ProjectInformation_temp" RENAME TO "ProjectInformation"')
+
+                    db.commit()
+                    logging.info(f"Rebuilt ProjectInformation table in source database: {db_path}")
+
+            # Ensure at least one row exists
+            cursor.execute("SELECT COUNT(*) FROM ProjectInformation")
+            count = cursor.fetchone()[0]
+
+            if count == 0:
+                # Add a default row
+                db_name = os.path.basename(db_path).replace('.db', '')
+                cursor.execute('''
+                    INSERT INTO "ProjectInformation" ("ProjectName", "DisciplineModel")
+                    VALUES (?, 'Default')
+                ''', (f"Source: {db_name}",))
+                db.commit()
+                logging.info(f"Added default ProjectInformation record to source database: {db_path}")
+        
+        except Exception as e:
+            db.rollback()
+            logging.error(f"Error preparing source database: {e}")
+            raise
+        finally:
+            db.close()
 
 class TableDataViewer:
     def __init__(self, parent, db_path, table_name):
