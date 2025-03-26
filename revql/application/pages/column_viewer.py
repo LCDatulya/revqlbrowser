@@ -2,7 +2,6 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from revql.application.utils.db_connection import DatabaseConnection
 from revql.application.utils.db_utils import delete_empty_columns
-from revql.application.utils import AppStyles
 
 class ColumnViewer:
     def __init__(self, parent, db_path, table_name):
@@ -11,29 +10,25 @@ class ColumnViewer:
 
         self.top = tk.Toplevel(parent)
         self.top.title(f"Columns in {table_name}")
-        
-        # Apply window defaults
-        AppStyles.configure_window_defaults(self.top)
 
-        self.frame = AppStyles.create_standard_frame(self.top)
+        self.frame = ttk.Frame(self.top, padding="10")
         self.frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
 
-        # Treeview for columns
-        tree_container, self.columns_tree = AppStyles.create_scrollable_treeview(
-            self.frame,
-            columns=["Column Name"],
-            column_widths=[200]
-        )
-        tree_container.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        self.top.columnconfigure(0, weight=1)
+        self.top.rowconfigure(0, weight=1)
+        self.frame.columnconfigure(0, weight=1)
+        self.frame.rowconfigure(0, weight=1)
 
-        # Buttons
-        button_panel, _, buttons = AppStyles.create_control_panel(
-            self.frame,
-            label_texts=[],
-            button_texts=["Delete Selected Columns"],
-            button_commands=[self.delete_selected_columns]
-        )
-        button_panel.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(10, 0))
+        self.columns_tree = ttk.Treeview(self.frame, columns=("Column Name",), show="headings", selectmode="extended")
+        self.columns_tree.heading("Column Name", text="Column Name")
+        self.columns_tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+
+        self.scrollbar = ttk.Scrollbar(self.frame, orient=tk.VERTICAL, command=self.columns_tree.yview)
+        self.columns_tree.configure(yscroll=self.scrollbar.set)
+        self.scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+
+        self.delete_button = ttk.Button(self.frame, text="Delete Selected Columns", command=self.delete_selected_columns)
+        self.delete_button.grid(row=1, column=0, sticky=tk.W)
 
         self.load_columns()
 
