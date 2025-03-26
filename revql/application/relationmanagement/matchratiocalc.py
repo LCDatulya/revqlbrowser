@@ -1,6 +1,7 @@
 from ..utils.db_connection import DatabaseConnection
 from ..utils.db_utils import delete_empty_tables, delete_empty_columns
 import sqlite3
+from ..utils.cleanup_utils import delete_empty_tables, delete_empty_columns
 
 def get_overlap_percentage(set1, set2):
     """Calculate the percentage of overlap between two sets."""
@@ -78,24 +79,8 @@ def find_matching_table_column_names(db_path):
                 if table_name == t_name:
                     continue
 
-                # Direct match for column_name ending with _id
-                if column_name.lower().endswith('_id'):
-                    base_name = column_name.lower()[:-3]  # Remove _id suffix
-                    if base_name == t_name.lower():
-                        match_ratio = 1.0
-                    else:
-                        # Calculate similarity for potential partial matches
-                        match_ratio = prefix_similarity(base_name, t_name.lower())
-                else:
-                    # Special case for Phase relationships
-                    if (column_name.lower().startswith('phase') and t_name == 'Phases') or \
-                       (column_name == "PhaseCreated" and t_name == "Phases"):
-                        match_ratio = 1.0
-                    else:
-                        # Calculate similarity
-                        match_ratio = prefix_similarity(column_name.lower(), t_name.lower())
-
-                if match_ratio > 0.5:
+                # Match only if column_name matches table_name exactly (ignoring case)
+                if column_name.lower() == t_name.lower():
                     try:
                         # Check if data in the matched column exists in the matching table
                         cursor.execute(f"SELECT DISTINCT \"{column_name}\" FROM \"{table_name}\" WHERE \"{column_name}\" IS NOT NULL")
@@ -119,12 +104,12 @@ def find_matching_table_column_names(db_path):
 
                                 overlap_percentage = get_overlap_percentage(column_data, id_data)
                                 
-                                if overlap_percentage >= 95:  # Data match above 95%
-                                    data_matching_info.append((table_name, column_name, t_name, match_ratio, overlap_percentage))
-                                    print(f"High data match found: {table_name}.{column_name} -> {t_name}.{id_column} (Overlap: {overlap_percentage:.2f}%)")
-                                elif column_data & id_data:  # If there's any overlap
-                                    matching_info.append((table_name, column_name, t_name, match_ratio))
-                                    print(f"Name match found: {table_name}.{column_name} -> {t_name}.{id_column}")
+                                # Only match if overlap is 100%
+                                if overlap_percentage == 100.0:
+                                    data_matching_info.append((table_name, column_name, t_name, 1.0, overlap_percentage))
+                                    print(f"Exact match found: {table_name}.{column_name} -> {t_name}.{id_column} (Overlap: {overlap_percentage:.2f}%)")
+                                else:
+                                    print(f"No match: {table_name}.{column_name} -> {t_name}.{id_column} (Overlap: {overlap_percentage:.2f}%)")
                                 break
 
                     except sqlite3.Error as e:

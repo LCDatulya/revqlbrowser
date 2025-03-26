@@ -5,7 +5,6 @@ from ..utils.tablesorter import TableSorter
 from ..relationmanagement.idrefactor import rename_id_columns_and_create_relations
 from ..utils.db_utils import delete_empty_columns, delete_empty_tables
 from ..utils.db_connection import DatabaseConnection
-from ..relationmanagement.projectmanagement import ensure_project_information_id
 import logging
 
 class RelationRatioViewer:
@@ -76,31 +75,63 @@ class RelationRatioViewer:
                                        "This will modify tables and create relationships. Continue?"):
                 return
         
+            # Step 1: Rename ID columns and create relationships
             rename_id_columns_and_create_relations(self.db_path, self.data_matches)
-            self.update_project_information_id()
+
+            # Step 2: Ensure ProjectInformation_id exists and is updated in all tables
+            self.ensure_project_information_id()
         
         except Exception as e:
-            print(f"Critical error: {str(e)}")
+            logging.error(f"Critical error: {str(e)}")
             messagebox.showerror("Error", f"An error occurred: {str(e)}")
             raise
 
-    def update_project_information_id(self):
-        """Update ProjectInformation_id for new data."""
+    def ensure_project_information_id(self):
+        """Ensure ProjectInformation_id exists in all tables and is updated."""
         db = DatabaseConnection(self.db_path)
         cursor = db.cursor
-        
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-        tables = cursor.fetchall()
-        for table in tables:
-            table_name = table[0]
-            if table_name in ['ProjectInformation', 'sqlite_sequence']:
-                continue
-                
-            try:
-                cursor.execute(f'UPDATE "{table_name}" SET "ProjectInformation_id" = (SELECT "ProjectInformation_id" FROM "ProjectInformation" ORDER BY "ProjectInformation_id" DESC LIMIT 1) WHERE "ProjectInformation_id" IS NULL')
-            except sqlite3.OperationalError as e:
-                logging.warning(f"Could not update ProjectInformation_id in {table_name}: {e}")
-        
-        db.commit()
-        db.close()
-        messagebox.showinfo("Success", "ProjectInformation_id updated for new data.")
+
+        try:
+            # Get the list of all tables
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+            tables = cursor.fetchall()
+
+            # Ensure ProjectInformation_id exists in all tables
+            for table in tables:
+                table_name = table[0]
+                if table_name in ['ProjectInformation', 'sqlite_sequence']:
+                    continue
+
+                cursor.execute(f'PRAGMA table_info("{table_name}");')
+                columns = cursor.fetchall()
+                column_names = [col[1] for col in columns]
+
+                # Add ProjectInformation_id column if it doesn't exist
+                if 'ProjectInformation_id' not in column_names:
+                    cursor.execute(f'ALTER TABLE "{table_name}" ADD COLUMN "ProjectInformation_id" INTEGER')
+                    logging.info(f"Added ProjectInformation_id to table {table_name}")
+
+                # Update ProjectInformation_id with the most recent value from ProjectInformation
+                cursor.execute(f'''
+                    UPDATE "{table_name}"
+                    SET "ProjectInformation_id" = (
+                        SELECT "ProjectInformation_id"
+                        FROM "ProjectInformation"
+                        ORDER BY "ProjectInformation_id" DESC
+                        LIMIT 1
+                    )
+                    WHERE "ProjectInformation_id" IS NULL
+                ''')
+                logging.info(f"Updated ProjectInformation_id in table {table_name}")
+
+            db.commit()
+            logging.info("Successfully ensured ProjectInformation_id in all tables.")
+
+        except sqlite3.Error as e:
+            db.rollback()
+            logging.error(f"Error ensuring ProjectInformation_id: {e}")
+            raise
+
+        finally:
+            db.close()
+            messagebox.showinfo("Success", "ProjectInformation_id updated for all tables.")
